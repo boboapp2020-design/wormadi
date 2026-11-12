@@ -7,7 +7,6 @@
   "workers_dev": true,
   "preview_urls": false,
   "services": [{ "binding": "APP", "service": "wormadi" }],
-  "durable_objects": { "bindings": [{ "name": "ROOM", "class_name": "WalkieRoom", "script_name": "wormadi" }] },
   // this Worker used to hold the voice room itself; it now uses the main Worker's room
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["WalkieRoom"] },
