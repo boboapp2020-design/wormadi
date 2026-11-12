@@ -367,6 +367,7 @@ function onMessage(m) {
     case 'sos': showSos(m.sos); break;
     case 'call': incomingCall(m); break;
     case 'invite': incomingInvite(m); break;
+    case 'dm': incomingDm(m); break;
     case 'kicked':
       if (lsGet('walkie_channel') === m.channel) lsSet('walkie_channel', '');
       if (S.me) S.me.channel = null;
@@ -576,7 +577,7 @@ function markChannelRead(ch) {
   if (c) { lsSet('walkie_alerts', JSON.stringify(S.msgAlerts)); renderBadges(); }
 }
 function renderBadges() {
-  const msgs = S.msgAlerts.filter(a => !a.read).length, n = S.unread + msgs;
+  const msgs = S.msgAlerts.filter(a => !a.read).length + (S.dmUnread ? dmUnreadTotal() : 0), n = S.unread + msgs;
   const set = (id, v) => { const b = $(id); if (b) { b.textContent = v > 9 ? '9+' : v; b.classList.toggle('hidden', !v); } };
   set('navMsgBadge', msgs); set('bellBadge', n); set('taskBadge', S.openTasks); set('msgTileBadge', msgs);
 }
@@ -1179,25 +1180,90 @@ function createRoomSheet(then) {
 ROUTES.convos = async () => {
   mount(`<div class="page">${header('ข้อความ')}<div class="search">${icon('search')}<input id="q" placeholder="ค้นหาช่องสื่อสาร..."></div>
     <div class="scroll"><div class="list" id="cv"><div class="empty">กำลังโหลด…</div></div></div></div>`, root => bindBack(root));
-  let last = {};
+  let last = {}, dms = [];
   if (has('history')) { try { for (const c of await api('/api/conversations')) last[c.channel] = c; } catch {} }
+  if (ACC()) { try { dms = await api('/api/dm'); for (const d of dms) S.dmPeers[d.peer.id] = d.peer; } catch {} }
   const draw = () => {
     const q = ($('q')?.value || '').trim().toLowerCase();
     const unread = ch => S.msgAlerts.filter(a => a.channel === ch && !a.read).length;
     const list = [...S.channels].filter(c => !q || c.name.toLowerCase().includes(q)).sort((a, b) => (last[b.name]?.ts || 0) - (last[a.name]?.ts || 0));
     if (!$('cv')) return;
-    $('cv').innerHTML = list.map(c => {
+    const dmList = dms.filter(d => !q || (d.peer.name || '').toLowerCase().includes(q));
+    const dmHtml = dmList.length ? `<div class="sec" style="padding:10px 18px 4px">แชทส่วนตัว</div>` + dmList.map(d => {
+      const n = S.dmUnread[d.channel] || 0, me = S.user && d.user_id === S.user.id;
+      const prev = (me ? 'คุณ: ' : '') + (d.kind === 'talk' ? '🎙 ' + fmtDur(d.ms) : esc(d.text || ''));
+      return `<button class="li" data-dm="${d.peer.id}">${avatar(d.peer)}<div class="grow"><div class="t1 ell">${esc(d.peer.name)} ${d.peer.online ? '<span class="dot on"></span>' : ''}</div><div class="t2 ell">${prev}</div></div>
+        <div style="text-align:right"><div class="small muted">${fmtTime(d.ts)}</div>${n ? `<span class="pill new">${n}</span>` : ''}</div></button>`;
+    }).join('') + '<div class="sec" style="padding:10px 18px 4px">กลุ่ม</div>' : '';
+    $('cv').innerHTML = dmHtml + list.map(c => {
       const l = last[c.name], n = unread(c.name);
       const prev = c.locked && !c.access ? '🔒 ห้องมีรหัส แตะเพื่อใส่รหัส' : l ? `${esc(l.name)}: ${l.kind === 'talk' ? '🎙 ' + fmtDur(l.ms) : esc(l.text)}` : 'ยังไม่มีข้อความ';
       return `<button class="li" data-ch="${esc(c.name)}">${chanIcon(c)}<div class="grow"><div class="t1 ell">${esc(c.name)}</div><div class="t2 ell">${prev}</div></div>
         <div style="text-align:right">${l ? `<div class="small muted">${fmtTime(l.ts)}</div>` : ''}${n ? `<span class="pill new">${n}</span>` : ''}</div></button>`;
     }).join('');
     for (const r of $$('[data-ch]', $('cv'))) r.onclick = () => openChatFor(r.dataset.ch);
+    for (const r of $$('[data-dm]', $('cv'))) r.onclick = () => go('dm', { u: r.dataset.dm });
+    loadAvatars($('cv'));
   };
   if ($('q')) $('q').oninput = draw;
   draw();
 };
 function openChatFor(name) { enterRoom(name, 'chat'); }
+
+// ---------------------------------------------------------------- private chat (แชทส่วนตัว)
+const dmChannel = (a, b) => `dm:${Math.min(a, b)}:${Math.max(a, b)}`;
+S.dmPeers = {};
+S.dmUnread = (() => { try { return JSON.parse(lsGet('walkie_dm_unread') || '{}'); } catch { return {}; } })();
+const dmUnreadTotal = () => Object.values(S.dmUnread).reduce((a, b) => a + b, 0);
+function saveDmUnread() { lsSet('walkie_dm_unread', JSON.stringify(S.dmUnread)); renderBadges(); }
+ROUTES.dm = async p => {
+  const pid = Number(p.u);
+  if (!S.user || !pid) return go('convos', {}, true);
+  const ch = dmChannel(S.user.id, pid);
+  let peer = S.dmPeers[pid] || { id: pid, name: '' };
+  mount(`<div class="page">${header(`<span id="dmName">${esc(peer.name || 'แชทส่วนตัว')}</span>`, '<span id="dmSub">แชทส่วนตัว</span>', `<button class="ib" id="dmCall" aria-label="วอหาส่วนตัว">${icon('walkie')}</button>`)}
+    <div class="msgs" id="dmMsgs" aria-live="polite"><div class="sys">กำลังโหลด…</div></div>
+    <form class="composer" id="dmForm"><input id="dmIn" placeholder="พิมพ์ข้อความ..." maxlength="1000" enterkeyhint="send" aria-label="พิมพ์ข้อความส่วนตัว" autocomplete="off">
+      <button class="go" id="dmSend" type="submit" aria-label="ส่ง">${icon('send')}</button></form></div>`, root => {
+    bindBack(root, 'convos');
+    $('dmForm').onsubmit = async e => {
+      e.preventDefault();
+      const v = $('dmIn').value.trim(); if (!v) return;
+      $('dmIn').value = '';
+      try { const r = await api(`/api/dm/${pid}`, { method: 'POST', body: { text: v } }); addDmMsg(r.msg); }
+      catch (er) { $('dmIn').value = v; toast(er.message); }
+    };
+    $('dmCall').onclick = () => { if (!peer.online) return toast('วอหาส่วนตัวได้เมื่ออีกฝ่ายออนไลน์อยู่'); startCall(peer); };
+  });
+  S.dmOpen = ch; delete S.dmUnread[ch]; saveDmUnread();
+  if (!peer.name || peer.online == null) { try { const u = (await api('/api/users')).find(x => x.id === pid); if (u) peer = S.dmPeers[pid] = u; } catch {} }
+  if (S.route !== 'dm' || S.dmOpen !== ch) return;
+  if ($('dmName')) $('dmName').textContent = peer.name || 'แชทส่วนตัว';
+  if ($('dmSub')) $('dmSub').textContent = peer.online ? 'ออนไลน์ · แชทส่วนตัว' : 'ไม่ออนไลน์ · จะเห็นเมื่อเข้าแอป';
+  let msgs = [];
+  try { msgs = (await api(`/api/messages?channel=${encodeURIComponent(ch)}&limit=100`)).msgs; } catch (e) { if ($('dmMsgs')) $('dmMsgs').innerHTML = `<div class="sys">${esc(e.message)}</div>`; return; }
+  const box = $('dmMsgs'); if (!box || S.dmOpen !== ch) return;
+  box.innerHTML = msgs.length ? msgs.map(msgHtml).join('') : `<div class="sys">เริ่มคุยกับ ${esc(peer.name)} ได้เลย · ข้อความเก็บไว้ 3 วัน</div>`;
+  loadAvatars(box); box.scrollTop = box.scrollHeight;
+};
+function addDmMsg(msg) {
+  const box = $('dmMsgs');
+  if (!box || S.route !== 'dm' || S.dmOpen !== msg.channel || $('m-' + msg.id)) return false;
+  box.querySelector('.sys')?.remove();
+  box.insertAdjacentHTML('beforeend', msgHtml(msg)); loadAvatars(box); box.scrollTop = box.scrollHeight;
+  return true;
+}
+function incomingDm(m) {
+  const msg = m.msg;
+  if (m.mine || (S.user && msg.user_id === S.user.id)) { addDmMsg(msg); return; }     // my own message (other screen)
+  S.dmPeers[m.from.id] = { ...(S.dmPeers[m.from.id] || {}), ...m.from, online: true };
+  if (addDmMsg(msg) && !document.hidden) return;                          // reading that chat right now
+  S.dmUnread[msg.channel] = (S.dmUnread[msg.channel] || 0) + 1; saveDmUnread();
+  if (!NATIVE) beep(740, 0.08); vibrate(60);
+  if (document.hidden) systemNotify(`💬 ${m.from.name}`, msg.text, 'dm:' + m.from.id);
+  else toast(`💬 ${m.from.name}: ${msg.text.slice(0, 60)}`);
+  if (S.route === 'convos') render();
+}
 ROUTES.chat = () => {
   if (S.me && !S.me.channel) return go('channels', { then: 'chat' }, true);
   const ch = S.me ? chanInfo(S.me.channel) : { name: '…' };
@@ -1256,7 +1322,7 @@ ROUTES.members = async p => {
     const q = $('q').value.trim().toLowerCase();
     const list = users.filter(u => (tab === 'all' || (tab === 'on') === u.online) && (!q || `${u.name} ${u.dept} ${u.emp}`.toLowerCase().includes(q)));
     $('ml').innerHTML = list.length ? list.map(u => `<button class="li" data-u="${u.id}">${avatar(u)}<div class="grow"><div class="t1 ell">${esc(u.name)}</div><div class="t2 ell">${esc(u.dept || '-')}${u.online && u.channel ? ` · ${esc(u.channel)}` : ''}</div></div>
-      <span class="small" style="display:flex;align-items:center;gap:6px;color:${u.online ? 'var(--ok-fg)' : 'var(--muted)'}"><span class="dot ${u.online ? 'on' : ''}"></span>${u.online ? (S.user && u.id !== S.user.id ? 'ออนไลน์ · แตะเพื่อวอ' : 'ออนไลน์') : u.last_seen ? `ไม่ออนไลน์ (${ago(u.last_seen)})` : 'ออฟไลน์'}</span></button>`).join('') : '<div class="empty">ไม่พบสมาชิก</div>';
+      <span class="small" style="display:flex;align-items:center;gap:6px;color:${u.online ? 'var(--ok-fg)' : 'var(--muted)'}"><span class="dot ${u.online ? 'on' : ''}"></span>${u.online ? (S.user && u.id !== S.user.id ? 'ออนไลน์ · แตะเพื่อวอ/แชท' : 'ออนไลน์') : u.last_seen ? `ไม่ออนไลน์ (${ago(u.last_seen)})` : 'ออฟไลน์'}</span></button>`).join('') : '<div class="empty">ไม่พบสมาชิก</div>';
     loadAvatars($('ml'));
     for (const r of $$('[data-u]')) r.onclick = () => userSheet(users.find(u => u.id === Number(r.dataset.u)));
   };
@@ -1267,12 +1333,14 @@ function userSheet(u) {
     <div style="color:${u.online ? 'var(--ok-fg)' : 'var(--muted)'};margin-top:4px"><span class="dot ${u.online ? 'on' : ''}"></span> ${u.online ? 'ออนไลน์' + (u.channel ? ' · ' + esc(u.channel) : '') : 'ออฟไลน์'}</div></div>
     <div class="list kv">${kv('building', 'แผนก', u.dept)}${kv('brief', 'ตำแหน่ง', u.position)}${kv('antenna', 'ช่องหลัก', u.main_channel_name)}${kv('shield', 'สิทธิ์การใช้งาน', ROLE_NAME[u.role])}</div>
     ${u.online && S.user && u.id !== S.user.id ? `<button class="btn primary" id="callU">${icon('walkie')}วอหาส่วนตัว</button>` : ''}
+    ${S.user && u.id !== S.user.id ? `<button class="btn" id="dmU" style="margin-top:10px">${icon('chat')}แชทส่วนตัว</button>` : ''}
     ${S.user && u.id !== S.user.id ? `<button class="btn" id="invU" style="margin-top:10px">${icon('plus')}เชิญเข้ากลุ่ม</button>` : ''}
     ${u.online && u.channel && u.channel !== 'คุยส่วนตัว' ? `<button class="btn" id="joinU" style="margin-top:10px">${icon('mic')}ไปห้อง ${esc(u.channel)}</button>` : ''}
     ${!u.online && S.user && u.id !== S.user.id ? '<p class="small muted" style="text-align:center">วอหาส่วนตัวได้เมื่อผู้ใช้นี้ออนไลน์อยู่</p>' : ''}`, bg => {
     const j = bg.querySelector('#joinU'); if (j) j.onclick = () => { closeSheet(); enterRoom(u.channel, 'ptt'); };
     const cu = bg.querySelector('#callU'); if (cu) cu.onclick = () => { closeSheet(); startCall(u); };
     const iv = bg.querySelector('#invU'); if (iv) iv.onclick = () => inviteSheet(u);
+    const dmb = bg.querySelector('#dmU'); if (dmb) dmb.onclick = () => { closeSheet(); S.dmPeers[u.id] = u; go('dm', { u: u.id }); };
     const av = bg.querySelector('.prof .av'); if (av) { av.style.width = '96px'; av.style.height = '96px'; av.style.margin = '0 auto'; }
   });
 }
@@ -1640,7 +1708,7 @@ ROUTES.notifications = async p => {
   });
   let server = [];
   if (ACC()) { try { server = await api('/api/notifications'); } catch {} }
-  const KIND = { reminder: ['bell', '#c27c00'], invite: ['team', '#1d63d6'], sos: ['siren', '#cf2020'], task: ['task', '#6d3fd8'], system: ['info', '#1d63d6'], msg: ['chat', '#178a44'], talk: ['mic', '#0b7f80'] };
+  const KIND = { dm: ['chat', '#178a44'], reminder: ['bell', '#c27c00'], invite: ['team', '#1d63d6'], sos: ['siren', '#cf2020'], task: ['task', '#6d3fd8'], system: ['info', '#1d63d6'], msg: ['chat', '#178a44'], talk: ['mic', '#0b7f80'] };
   const items = [
     ...server.map(n => ({ ts: n.ts, kind: n.kind, title: n.title, body: n.body, read: n.read, ref: n.ref })),
     ...S.msgAlerts.map(a => ({ ts: a.ts, kind: a.kind === 'talk' ? 'talk' : 'msg', title: `${a.channel}`, body: `${a.name}: ${a.kind === 'talk' ? 'พูด ' + fmtDur(a.ms) : a.text}`, read: a.read, ch: a.channel })),
@@ -1653,6 +1721,7 @@ ROUTES.notifications = async p => {
     const n = items[Number(b.dataset.i)];
     if (n.ch) openChatFor(n.ch); else if (n.kind === 'sos') go('sos'); else if (n.kind === 'task') go('tasks');
     else if (n.kind === 'reminder') go('tasks');
+    else if (n.kind === 'dm' && String(n.ref || '').startsWith('dm:')) go('dm', { u: String(n.ref).slice(3) });
     else if (n.kind === 'invite' && String(n.ref || '').startsWith('room:')) loadChannels().then(() => enterRoom(String(n.ref).slice(5), 'ptt'));
   };
   if (ACC()) { api('/api/notifications/read', { method: 'POST' }).then(() => { S.unread = 0; renderBadges(); }).catch(() => {}); }

@@ -423,6 +423,29 @@ test('SOS แม้ไม่อยู่ในกลุ่มไหนก็ไ�
   assert.equal(lg2.status, 200);
 });
 
+test('แชทส่วนตัว: ส่งถึงอีกฝ่ายทันที, คนที่สามอ่านไม่ได้, มีในรายการแชท, ออฟไลน์ได้แจ้งเตือน', async () => {
+  const id = async tk => (await call('GET', '/api/me', tk)).body.user.id;
+  const [ia, ib, ic] = [await id(T['แชทA']), await id(T['แชทB']), await id(T['แชทC'])];
+  const a = await client(T['แชทA']), b = await client(T['แชทB']);
+  const r = await call('POST', `/api/dm/${ib}`, T['แชทA'], { text: 'สวัสดีส่วนตัว' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const got = await b.wait('dm');
+  assert.equal(got.msg.text, 'สวัสดีส่วนตัว'); assert.equal(got.from.id, ia); assert.ok(!got.mine);
+  assert.equal((await a.wait('dm')).mine, true, 'หน้าจออื่นของคนส่งเห็นด้วย');
+  const ch = r.body.msg.channel;
+  assert.equal((await call('GET', '/api/messages?channel=' + ch, T['แชทC'])).status, 403, 'คนที่สามอ่านไม่ได้');
+  assert.ok((await call('GET', '/api/messages?channel=' + ch, T['แชทB'])).body.msgs.some(x => x.text === 'สวัสดีส่วนตัว'));
+  const list = (await call('GET', '/api/dm', T['แชทB'])).body;
+  assert.ok(list.some(d => d.channel === ch && d.peer.id === ia), 'อยู่ในรายการแชทส่วนตัว');
+  assert.ok(!(await call('GET', '/api/dm', T['แชทC'])).body.some(d => d.channel === ch));
+  assert.equal((await call('POST', `/api/dm/${ia}`, T['แชทA'], { text: 'x' })).status, 400, 'ส่งถึงตัวเองไม่ได้');
+  assert.equal((await call('POST', `/api/dm/${ib}`, T['แชทA'], { text: '' })).status, 400);
+  await call('POST', `/api/dm/${ic}`, T['แชทA'], { text: 'ถึงคนออฟไลน์' });
+  const n = (await call('GET', '/api/notifications', T['แชทC'])).body;
+  assert.ok(JSON.stringify(n).includes('ถึงคนออฟไลน์'), 'คนที่ไม่ได้ออนไลน์เห็นในการแจ้งเตือน');
+  a.close(); b.close();
+});
+
 (async () => {
   let fail = 0;
   for (const [n, f] of tests) {

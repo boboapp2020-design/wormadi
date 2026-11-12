@@ -450,6 +450,12 @@ public class WalkieService extends Service {
                 }
                 break;
             }
+            case "dm": {                      // private chat message
+                JSONObject from = m.optJSONObject("from"), msg = m.optJSONObject("msg");
+                if (from != null && msg != null && !m.optBoolean("mine"))
+                    postAlert(INFO_CHANNEL, "💬 " + from.optString("name"), msg.optString("text"), false);
+                break;
+            }
             case "notification": {
                 JSONObject n = m.optJSONObject("notification");
                 if (n != null) {

@@ -362,6 +362,39 @@ async function api(req, env, url) {
     return json({ ok: true });
   }
 
+  // ---------------------------------------------------------------- private chat (แชทส่วนตัว)
+  // messages live in channel "dm:<smaller id>:<bigger id>", same as the private call channel
+  if (p === '/api/dm' && m === 'GET') {          // my private conversations, newest first
+    const { results } = await db.prepare(
+      `SELECT m.channel, m.kind, m.name, m.text, m.ms, m.ts, m.user_id FROM messages m
+       JOIN (SELECT channel, MAX(id) AS id FROM messages WHERE channel LIKE 'dm:%' GROUP BY channel) x ON x.id = m.id
+       ORDER BY m.ts DESC LIMIT 100`).all();
+    const mine = results.filter(r => !dmBlocked(r.channel, me));
+    const ids = mine.map(r => r.channel.split(':').slice(1).map(Number).find(x => x !== me.id));
+    const peers = ids.length ? (await db.prepare(`SELECT ${PUBLIC_USER} FROM users u WHERE u.id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all()).results : [];
+    const online = new Set((await roomCall(env, '/online')).map(o => o.id));
+    return json(mine.map((r, i) => ({ ...r, peer: { ...(peers.find(u => u.id === ids[i]) || { id: ids[i], name: '?' }), online: online.has(ids[i]) } })));
+  }
+  if (seg[1] === 'dm' && id && m === 'POST') {    // send a private message
+    const text = str((await readJson(req)).text, 1000);
+    if (!text) return fail(400, 'กรุณาพิมพ์ข้อความ');
+    if (id === me.id) return fail(400, 'ส่งถึงตัวเองไม่ได้');
+    const to = await db.prepare('SELECT id, name FROM users WHERE id = ? AND active = 1').bind(id).first();
+    if (!to) return fail(404, 'ไม่พบผู้ใช้นี้');
+    const channel = `dm:${Math.min(me.id, id)}:${Math.max(me.id, id)}`, ts = Date.now();
+    const r = await db.prepare('INSERT INTO messages (ts, channel, kind, name, dept, uid, user_id, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(ts, channel, 'text', me.name, me.dept || '', '', me.id, text).run();
+    const msg = { id: r.meta.last_row_id, ts, channel, kind: 'text', name: me.name, dept: me.dept || '', uid: '', user_id: me.id, text, audio: 0 };
+    const from = { id: me.id, name: me.name, dept: me.dept || '' };
+    const { delivered } = await roomCall(env, '/broadcast', { msg: { type: 'dm', msg, from, to: id }, userIds: [id] });
+    await roomCall(env, '/broadcast', { msg: { type: 'dm', msg, from, to: id, mine: true }, userIds: [me.id] });   // my other screens
+    const online = (await roomCall(env, '/online')).some(o => o.id === id);
+    if (!online)        // they'll see it in notifications when they open the app
+      await db.prepare('INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(ts, id, 'dm', `💬 ${me.name}`, text.slice(0, 120), 'dm:' + me.id).run();
+    return json({ ok: true, msg, delivered });
+  }
+
   // ---------------------------------------------------------------- messages / history / audio
   if (p === '/api/messages' && m === 'GET') {
     const channel = url.searchParams.get('channel');
