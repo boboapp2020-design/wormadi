@@ -283,6 +283,17 @@ function joinRaw(ch) {
 }
 // several rooms at once: "rooms" = the rooms I hear; "channel" = the room my push-to-talk goes to
 const LOBBY = 'ทุกคน';
+/** rooms I switched the sound off for (still in the room, still get chat; voice is not played) */
+function mutedRooms() { try { const r = JSON.parse(lsGet('walkie_muted_rooms') || '[]'); return Array.isArray(r) ? r : []; } catch { return []; } }
+const isMuted = n => mutedRooms().includes(n);
+function toggleMute(n) {
+  const r = mutedRooms(), i = r.indexOf(n);
+  i >= 0 ? r.splice(i, 1) : r.push(n);
+  lsSet('walkie_muted_rooms', JSON.stringify(r));
+  if (S.hearing && S.hearing.channel === n) S.skipRx = r.includes(n);
+  toast(r.includes(n) ? `ปิดเสียงห้อง “${roomLabel(n)}” แล้ว` : `เปิดเสียงห้อง “${roomLabel(n)}” แล้ว`);
+  return r.includes(n);
+}
 function savedRooms() { try { const r = JSON.parse(lsGet('walkie_rooms') || 'null'); return Array.isArray(r) && r.length ? r : [LOBBY]; } catch { return [LOBBY]; } }
 function saveRooms(r) { lsSet('walkie_rooms', JSON.stringify([...new Set(r.filter(x => x && !isDm(x)))])); }
 /** the rooms to be in when the talk room is "active" */
@@ -299,7 +310,8 @@ function roomMenuHtml() {
   if (cur && !isDm(cur) && !mine.includes(cur)) mine.unshift(cur);
   const row = n => {
     const c = S.channels.find(x => x.name === n) || chanInfo(n), cnt = S.counts[n], on = n === cur;
-    return `<button type="button" class="chopt ${on ? 'on' : ''}" role="option" aria-selected="${on}" data-v="${esc(n)}">${chanIcon(c)}<span class="grow"><b class="ell">${esc(roomLabel(n))}</b><small>${cnt != null ? cnt + ' คนออนไลน์' : '&nbsp;'}</small></span>${c.locked && !c.access ? `<span class="chlock" title="มีรหัส">${icon('lock')}</span>` : ''}${on ? `<span class="chck">${icon('check')}</span>` : ''}</button>`;
+    const mu = isMuted(n);
+    return `<div class="chrow"><button type="button" class="chopt ${on ? 'on' : ''}" role="option" aria-selected="${on}" data-v="${esc(n)}">${chanIcon(c)}<span class="grow"><b class="ell">${esc(roomLabel(n))}</b><small>${cnt != null ? cnt + ' คนออนไลน์' : '&nbsp;'}</small></span>${c.locked && !c.access ? `<span class="chlock" title="มีรหัส">${icon('lock')}</span>` : ''}${on ? `<span class="chck">${icon('check')}</span>` : ''}</button><button type="button" class="chmute ${mu ? 'off' : ''}" data-mute="${esc(n)}" aria-pressed="${mu}" aria-label="${mu ? 'เปิดเสียงห้องนี้' : 'ปิดเสียงห้องนี้'}">${icon(mu ? 'mute' : 'volume')}</button></div>`;
   };
   const others = S.channels.filter(c => !mine.includes(c.name) && !isDm(c.name));
   const head = t => `<div class="chhead">${t}</div>`;
@@ -379,9 +391,10 @@ function onMessage(m) {
       toast(`${m.by} กำลังพูดอยู่ในห้อง ${roomLabel(m.channel || S.me?.channel)} รอสักครู่`); break;
     case 'talk_start':
       S.hearing = { name: m.name, channel: m.channel || (S.me && S.me.channel) };
-      if (!NATIVE) { rxRate = m.rate || TARGET_RATE; playHead = 0; beep(660, 0.06); }
+      S.skipRx = isMuted(S.hearing.channel);          // this room's sound is off: show who talks, play nothing
+      if (!NATIVE) { rxRate = m.rate || TARGET_RATE; playHead = 0; if (!S.skipRx) beep(660, 0.06); }
       renderTalk();
-      if (document.hidden && S.hearing.channel !== S.me?.channel) systemNotify(`🔊 ${m.name}`, `พูดในห้อง ${roomLabel(S.hearing.channel)}`, 'talk');
+      if (document.hidden && !S.skipRx && S.hearing.channel !== S.me?.channel) systemNotify(`🔊 ${m.name}`, `พูดในห้อง ${roomLabel(S.hearing.channel)}`, 'talk');
       break;
     case 'talk_also':             // someone talks in another of my rooms while I hear a different one
       if (!S.alsoAt || Date.now() - S.alsoAt > 4000) { S.alsoAt = Date.now(); toast(`${m.name} กำลังพูดในห้อง ${roomLabel(m.channel)} ด้วย (ได้ยินทีละห้อง)`); }
@@ -389,7 +402,8 @@ function onMessage(m) {
     case 'talk_end':
       if (S.hearing && S.hearing.name === m.name && (!m.channel || S.hearing.channel === m.channel)) { S.hearing = null; renderTalk(); }
       if (!S.me) break;
-      if (!NATIVE && m.name !== S.me.name) beep(520, 0.1);
+      if (!NATIVE && m.name !== S.me.name && !S.skipRx) beep(520, 0.1);
+      if (S.hearing === null) S.skipRx = false;
       if (m.reason === 'timeout' && m.name === S.me.name) toast('พูดได้สูงสุด 60 วินาทีต่อครั้ง');
       if (!NATIVE && m.name === S.me.name) { talking = false; renderTalk(); }
       if (!has('chat')) addChatMsg({ id: 'l' + Date.now(), ts: Date.now(), channel: S.me.channel, kind: 'talk', name: m.name, ms: m.ms, uid: m.name === S.me.name ? S.uid : '' });
@@ -485,7 +499,7 @@ async function ensureMic() {
   micSource.connect(processor); processor.connect(mute); mute.connect(audioCtx.destination);
 }
 function playChunk(buf) {
-  if (!audioCtx || !buf.byteLength) return;
+  if (!audioCtx || !buf.byteLength || S.skipRx) return;
   const pcm = new Int16Array(buf), f = new Float32Array(pcm.length);
   let peak = 0;
   for (let i = 0; i < pcm.length; i++) { f[i] = pcm[i] / 0x7fff; peak = Math.max(peak, Math.abs(f[i])); }
@@ -968,6 +982,13 @@ ROUTES.ptt = () => {
     const card = $('chPick'), menu = $('chMenu');
     const setOpen = o => { menu.classList.toggle('hidden', !o); card.setAttribute('aria-expanded', String(o)); card.classList.toggle('open', o); if (o) { const on = menu.querySelector('.chopt.on'); if (on) on.scrollIntoView({ block: 'nearest' }); } };
     card.onclick = () => { if (!card.disabled) setOpen(menu.classList.contains('hidden')); };
+    for (const b of $$('.chmute', menu)) b.onclick = e => {
+      e.stopPropagation();
+      const off = toggleMute(b.dataset.mute);
+      b.classList.toggle('off', off); b.setAttribute('aria-pressed', String(off));
+      b.setAttribute('aria-label', off ? 'เปิดเสียงห้องนี้' : 'ปิดเสียงห้องนี้');
+      b.innerHTML = icon(off ? 'mute' : 'volume');
+    };
     for (const b of $$('.chopt', menu)) b.onclick = () => {
       const v = b.dataset.v, cur = (S.me && S.me.channel) || '';
       setOpen(false);
@@ -2002,7 +2023,7 @@ ROUTES.admin = async p => {
         $('al').innerHTML = ['admin', 'lead', 'user'].map(r => `<div class="sec">${ROLE_NAME[r]} (${users.filter(u => u.role === r && u.active).length})</div>
           <div class="small muted" style="margin:0 18px 6px">${r === 'admin' ? 'จัดการสมาชิก กลุ่ม สิทธิ์ แผนที่ และประกาศ' : r === 'lead' ? 'มอบหมายงาน ปิดเหตุฉุกเฉิน ดูรายงานและ log' : 'พูด/ฟัง แชท แจ้งเหตุ งานของตัวเอง'}</div>
           <div class="list">${users.filter(u => u.role === r && u.active).map(u => `<div class="li">${avatar(u)}<div class="grow"><div class="t1 ell">${esc(u.name)}</div><div class="t2">${esc(u.dept)}</div></div>
-            <select data-role="${u.id}" aria-label="สิทธิ์ของ ${esc(u.name)}" style="border-radius:10px;padding:6px;border:1px solid var(--line-soft);background:var(--panel)">${['user', 'lead', 'admin'].map(x => `<option value="${x}" ${x === u.role ? 'selected' : ''}>${ROLE_NAME[x]}</option>`).join('')}</select></div>`).join('') || '<div class="empty">—</div>'}</div>`).join('');
+            <select data-role="${u.id}" aria-label="สิทธิ์ของ ${esc(u.name)}" class="sel-sm">${['user', 'lead', 'admin'].map(x => `<option value="${x}" ${x === u.role ? 'selected' : ''}>${ROLE_NAME[x]}</option>`).join('')}</select></div>`).join('') || '<div class="empty">—</div>'}</div>`).join('');
         for (const s of $$('[data-role]')) s.onchange = async () => {
           const u = users.find(x => x.id === Number(s.dataset.role));
           try { await api(`/api/admin/users/${u.id}`, { method: 'PATCH', body: { ...u, role: s.value } }); toast(`เปลี่ยนสิทธิ์ ${u.name} แล้ว`); render(); } catch (e) { toast(e.message); s.value = u.role; }

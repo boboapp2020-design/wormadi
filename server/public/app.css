@@ -441,3 +441,19 @@ input.masked.show { -webkit-text-security: none; text-security: none; }
 .chopt .chlock { color:#ffd166; display:grid; place-items:center; flex:none; }
 .chopt .chlock svg { width:18px; height:18px; }
 .chsep { height:1px; margin:6px 8px; background:rgba(255,255,255,.18); }
+
+/* dropdowns: match the theme (field colours, themed arrow, themed pop-up list) */
+select { -webkit-appearance:none; appearance:none; cursor:pointer; background-image:var(--chev); background-repeat:no-repeat; background-position:right 14px center; background-size:20px 20px; }
+.field select { padding-right:46px; text-overflow:ellipsis; background-image:var(--chev); background-repeat:no-repeat; background-position:right 14px center; background-size:20px 20px; }
+.field select:focus, select.sel-sm:focus { outline:3px solid var(--focus); outline-offset:1px; border-color:var(--primary); }
+select option, select optgroup { background:var(--panel); color:var(--text); }
+select:disabled { opacity:.6; cursor:not-allowed; }
+select.sel-sm { min-height:40px; padding:6px 34px 6px 12px; border-radius:10px; border:var(--line-w) solid var(--line-soft); background-color:var(--field); color:var(--text); background-position:right 9px center; background-size:16px 16px; font-size:15px; }
+
+/* per-room sound switch (inside the room drop-down) */
+.chrow { display:flex; align-items:center; gap:4px; }
+.chrow .chopt { flex:1; min-width:0; }
+.chmute { flex:none; width:46px; height:46px; display:grid; place-items:center; border:0; border-radius:14px; background:transparent; color:#9fe0a8; cursor:pointer; }
+.chmute svg { width:24px; height:24px; }
+.chmute:hover, .chmute:focus-visible { background:rgba(255,255,255,.12); outline:none; }
+.chmute.off { color:#ff9a8a; background:rgba(255,90,70,.14); }

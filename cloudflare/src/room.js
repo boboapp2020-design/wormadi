@@ -334,6 +334,14 @@ export class WalkieRoom extends DurableObject {
         const now = { ...this.info(ws), ok: true, uid, name, dept, role, devUid, channel: ch, rooms };
         this.setInfo(ws, now);
         for (const r of before) if (!rooms.includes(r)) this.afterLeft(ws, cur, r);
+        if (this.env.DB && uid) {                 // remember when I joined each room: later joiners never see earlier chat
+          try {
+            const t = Date.now(), live = rooms.filter(x => !x.startsWith('dm:'));
+            const st = live.map(x => this.env.DB.prepare('INSERT OR IGNORE INTO room_since (user_id, channel, ts) VALUES (?, ?, ?)').bind(uid, x, t));
+            for (const x of before) if (!rooms.includes(x) && !x.startsWith('dm:')) st.push(this.env.DB.prepare('DELETE FROM room_since WHERE user_id = ? AND channel = ?').bind(uid, x));
+            if (st.length) await this.env.DB.batch(st);
+          } catch {}
+        }
         this.send(ws, { type: 'joined', id: uid ?? now.cid, name, channel: ch, rooms, channels: this.channels, uid: devUid, emojis: EMOJIS });
         for (const r of rooms) {
           if (!before.includes(r)) { this.broadcastState(r); this.log('join', r, name); }
@@ -390,6 +398,7 @@ export class WalkieRoom extends DurableObject {
             if (!keep.includes(active)) keep.unshift(active);
             this.setInfo(o, { ...c, channel: active, rooms: keep });
             this.afterLeft(o, c, ch);
+            try { await this.env.DB.prepare('DELETE FROM room_since WHERE user_id = ? AND channel = ?').bind(to, ch).run(); } catch {}
             this.send(o, { type: 'kicked', channel: ch, by: me.name });
           }
         }

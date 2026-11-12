@@ -4,6 +4,7 @@
    ปุ่มพูด: ส้ม = พร้อมพูด, แดง = กำลังพูด, เขียว = กำลังรับฟัง (ทั้งสองธีม)
    ทุกคู่สีตัวอักษรผ่าน WCAG AA (ตรวจด้วย node tools/check-contrast.js) */
 :root, :root[data-theme="light"] {
+  color-scheme:light; --chev:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27 fill=%27none%27 stroke=%27%230a4fb8%27 stroke-width=%272.6%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Cpath d=%27M6 9l6 6 6-6%27/%3E%3C/svg%3E");
   --bg:#eef3fa; --bg-2:#e5edf8; --panel:#ffffff; --panel-2:#eef2f8; --field:#ffffff;
   --line:#7a8aa3; --line-soft:#dbe3ee; --line-w:1.5px;
   --text:#0d1b33; --muted:#4a5a73; --nav-muted:#5b6880;
@@ -36,6 +37,7 @@
   --focus:#c25e00;
 }
 :root[data-theme="dark"] {
+  color-scheme:dark; --chev:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27 fill=%27none%27 stroke=%27%238dbcff%27 stroke-width=%272.6%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Cpath d=%27M6 9l6 6 6-6%27/%3E%3C/svg%3E");
   --bg:#0b1426; --bg-2:#0a1220; --panel:#13213a; --panel-2:#1b2c4a; --field:#0e1a2f;
   --line:#6a7fa3; --line-soft:#2a3d5e; --line-w:1px;
   --text:#e8eef8; --muted:#a9b7cc; --nav-muted:#9fb0c8;

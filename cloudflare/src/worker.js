@@ -421,9 +421,12 @@ async function api(req, env, url) {
     if (dmBlocked(channel, me)) return fail(403, 'เป็นการคุยส่วนตัวของผู้อื่น');
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
     const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
+    // only what was said since I joined this room (private chats are between two people: all of it)
+    const since = channel.startsWith('dm:') ? 0
+      : ((await db.prepare('SELECT ts FROM room_since WHERE user_id = ? AND channel = ?').bind(me.id, channel).first()) || {}).ts || 0;
     const { results } = await db.prepare(
       `SELECT id, ts, channel, kind, name, dept, uid, user_id, text, ms, (audio IS NOT NULL) AS audio
-       FROM messages WHERE channel = ? AND id < ? ORDER BY id DESC LIMIT ?`).bind(channel, before, limit).all();
+       FROM messages WHERE channel = ? AND id < ? AND ts >= ? ORDER BY id DESC LIMIT ?`).bind(channel, before, since, limit).all();
     results.reverse();
     return json({ msgs: results, reactions: await reactionsFor(db, results.map(r => r.id)), more: results.length === limit });
   }

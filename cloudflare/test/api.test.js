@@ -523,6 +523,22 @@ test('หลายห้อง: อยู่ได้หลายห้อง, �
   a.close(); b.close(); c.close();
 });
 
+test('แชทกลุ่ม: คนเข้าทีหลังไม่เห็นแชทก่อนหน้า (เห็นเฉพาะตั้งแต่เข้า) · ออกแล้วกลับเข้าใหม่ก็เริ่มนับใหม่', async () => {
+  const room = 'ห้องแชทเก่า', mk = await call('POST', '/api/channels', T['แชทA'], { name: room });
+  assert.equal(mk.status, 200, JSON.stringify(mk.body));
+  const a = await client(T['แชทA'], room);
+  a.send(JSON.stringify({ type: 'chat', text: 'ข้อความก่อนเข้า' })); await a.wait('chat');
+  await sleep(50);
+  const b = await client(T['แชทB'], room);
+  await sleep(400); a.send(JSON.stringify({ type: 'chat', text: 'ข้อความหลังเข้า' })); await a.wait('chat'); await sleep(50);
+  const seeB = async () => (await call('GET', '/api/messages?channel=' + encodeURIComponent(room), T['แชทB'])).body.msgs.map(x => x.text);
+  let tb = await seeB();
+  assert.ok(!tb.includes('ข้อความก่อนเข้า'), 'ไม่เห็นแชทก่อนเข้า'); assert.ok(tb.includes('ข้อความหลังเข้า'));
+  const ta = (await call('GET', '/api/messages?channel=' + encodeURIComponent(room), T['แชทA'])).body.msgs.map(x => x.text);
+  assert.ok(ta.includes('ข้อความก่อนเข้า'), 'คนที่อยู่มาก่อนเห็นครบ');
+  a.close(); b.close();
+});
+
 (async () => {
   let fail = 0;
   for (const [n, f] of tests) {
