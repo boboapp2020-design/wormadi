@@ -150,6 +150,7 @@ async function fireReminders(env) {
 async function deleteChannel(db, cid) {
   await db.batch([
     db.prepare('DELETE FROM channel_access WHERE channel_id = ?').bind(cid),
+    db.prepare('DELETE FROM room_invites WHERE channel_id = ?').bind(cid),
     db.prepare('UPDATE users SET main_channel = NULL WHERE main_channel = ?').bind(cid),
     db.prepare('UPDATE map_pins SET channel_id = NULL WHERE channel_id = ?').bind(cid),
     db.prepare('DELETE FROM channels WHERE id = ?').bind(cid),

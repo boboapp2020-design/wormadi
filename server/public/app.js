@@ -416,6 +416,8 @@ function onMessage(m) {
       if (['ptt', 'chat'].includes(S.route)) go('home', {}, true); else render();
       break;
     case 'kick_done': toast(`นำ ${m.name || 'สมาชิก'} ออกจากกลุ่มแล้ว`); break;
+    case 'invite_done': if (m.accept) loadChannels().then(() => enterRoom(m.channel, 'ptt', { confirmed: true })); else toast('ปฏิเสธคำเชิญแล้ว'); break;
+    case 'invite_answer': toast(`${m.name} ${m.accept ? 'เข้ากลุ่ม' : 'ปฏิเสธคำเชิญ'} "${m.channel}"`); break;
     case 'invite_sent': toast(m.online ? `ส่งคำเชิญเข้ากลุ่ม "${m.channel}" แล้ว` : `ส่งคำเชิญแล้ว จะเห็นเมื่อเข้าแอป`); break;
     case 'call_ringing': toast(`กำลังเรียก ${S.call?.peer?.name || ''}…`); break;
     case 'call_fail': toast(m.message || 'เรียกไม่สำเร็จ'); endCall(); break;
@@ -1093,11 +1095,15 @@ function incomingInvite(m) {
   vibrate([150, 80, 150]); if (!NATIVE) beep(880, 0.12);
   if (document.hidden) systemNotify(`${m.from.name} เชิญคุณเข้ากลุ่ม`, m.channel, 'inv');
   if (S.call && S.call.status === 'active') return toast(`${m.from.name} เชิญคุณเข้ากลุ่ม "${m.channel}" (ดูได้ในการแจ้งเตือน)`);
-  sheet(`<div style="text-align:center"><div style="display:flex;justify-content:center;margin:6px 0 10px">${avatar({ id: m.from.id, name: m.from.name, has_avatar: 1 }, 'av')}</div>
-    <h3 style="margin:4px 0">${esc(m.from.name)}</h3><p style="margin:6px 0 16px">เชิญคุณเข้ากลุ่ม <b>“${esc(m.channel)}”</b>${m.locked ? '<br><span class="small muted">กลุ่มนี้มีรหัส แต่คุณได้รับเชิญจึงเข้าได้เลย</span>' : ''}</p>
-    <div style="display:flex;gap:12px"><button class="btn" id="invNo" type="button">ไว้ทีหลัง</button><button class="btn primary" id="invYes" type="button">${icon('team')}เข้ากลุ่ม</button></div></div>`, () => {
-    $('invNo').onclick = closeSheet;
-    $('invYes').onclick = async () => { closeSheet(); await loadChannels(); enterRoom(m.channel, 'ptt', { confirmed: true }); };
+  answerInvite(m.channel, m.from);
+}
+/** the invitee must accept before joining: nothing happens until they tap ยอมรับ */
+function answerInvite(channel, from) {
+  const who = from && from.id ? `<div style="display:flex;justify-content:center;margin:6px 0 10px">${avatar({ id: from.id, name: from.name, has_avatar: 1 }, 'av')}</div><h3 style="margin:4px 0">${esc(from.name)}</h3>` : '<h3 style="margin:4px 0">คำเชิญเข้ากลุ่ม</h3>';
+  sheet(`<div style="text-align:center">${who}<p style="margin:6px 0 16px">เชิญคุณเข้ากลุ่ม <b>“${esc(channel)}”</b></p>
+    <div style="display:flex;gap:12px"><button class="btn" id="invNo" type="button">ปฏิเสธ</button><button class="btn primary" id="invYes" type="button">${icon('team')}ยอมรับ</button></div></div>`, () => {
+    $('invNo').onclick = () => { closeSheet(); sendMsg({ type: 'invite_reply', channel, accept: false }); };
+    $('invYes').onclick = () => { closeSheet(); sendMsg({ type: 'invite_reply', channel, accept: true }); };
   });
 }
 
@@ -1801,7 +1807,7 @@ ROUTES.notifications = async p => {
     if (n.ch) openChatFor(n.ch); else if (n.kind === 'sos') go('sos'); else if (n.kind === 'task') go('tasks');
     else if (n.kind === 'reminder') go('tasks');
     else if (n.kind === 'dm' && String(n.ref || '').startsWith('dm:')) go('dm', { u: String(n.ref).slice(3) });
-    else if (n.kind === 'invite' && String(n.ref || '').startsWith('room:')) loadChannels().then(() => enterRoom(String(n.ref).slice(5), 'ptt'));
+    else if (n.kind === 'invite' && String(n.ref || '').startsWith('room:')) answerInvite(String(n.ref).slice(5), { name: String(n.title || '').split(' เชิญ')[0] });
   };
   if (ACC()) { api('/api/notifications/read', { method: 'POST' }).then(() => { S.unread = 0; renderBadges(); }).catch(() => {}); }
   S.msgAlerts.forEach(a => (a.read = true)); lsSet('walkie_alerts', JSON.stringify(S.msgAlerts)); renderBadges();

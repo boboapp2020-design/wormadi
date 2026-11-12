@@ -325,7 +325,7 @@ test('วอส่วนตัว: เรียกคนที่ออนไล
   a.close(); b.close(); c.close();
 });
 
-test('เชิญเข้ากลุ่ม: เชิญจากโปรไฟล์ -> อีกฝ่ายได้รับทันที + แจ้งเตือน, กลุ่มมีรหัสเข้าได้โดยไม่ต้องใส่รหัส; เข้าแอปครั้งแรกไม่มีกลุ่ม', async () => {
+test('เชิญเข้ากลุ่ม: อีกฝ่ายได้รับทันที + แจ้งเตือน, ต้องกดยอมรับก่อนถึงเข้าได้ (ไม่เข้าอัตโนมัติ), ปฏิเสธได้; เข้าแอปครั้งแรกไม่มีกลุ่ม', async () => {
   const id = async tk => (await call('GET', '/api/me', tk)).body.user.id;
   const ib = await id(T['แชทB']);
   const room = await call('POST', '/api/channels', T['แชทA'], { name: 'กลุ่มเชิญทดสอบ', password: 'pass9' });
@@ -344,8 +344,25 @@ test('เชิญเข้ากลุ่ม: เชิญจากโปรไ
   const n = (await call('GET', '/api/notifications', T['แชทB'])).body;
   assert.ok(JSON.stringify(n).includes('room:กลุ่มเชิญทดสอบ'), 'มีในการแจ้งเตือน');
   b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: 'กลุ่มเชิญทดสอบ' }));
-  assert.equal((await wait(b, 'joined')).channel, 'กลุ่มเชิญทดสอบ', 'ได้รับเชิญแล้วเข้ากลุ่มมีรหัสได้เลย');
-  a.close(); b.close();
+  assert.equal((await wait(b, 'error')).code, 'locked', 'ยังไม่กดยอมรับ = ยังเข้าไม่ได้');
+  b.send(JSON.stringify({ type: 'invite_reply', channel: 'กลุ่มเชิญทดสอบ', accept: true }));
+  assert.equal((await wait(b, 'invite_done')).accept, true);
+  assert.equal((await a.wait('invite_answer')).accept, true, 'คนเชิญรู้ว่าอีกฝ่ายยอมรับ');
+  b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: 'กลุ่มเชิญทดสอบ' }));
+  assert.equal((await wait(b, 'joined')).channel, 'กลุ่มเชิญทดสอบ', 'ยอมรับแล้วเข้ากลุ่มมีรหัสได้');
+  b.send(JSON.stringify({ type: 'invite_reply', channel: 'กลุ่มเชิญทดสอบ', accept: true }));
+  assert.equal((await wait(b, 'error')).code, 'invite', 'คำเชิญใช้ได้ครั้งเดียว');
+  // decline: no access
+  const ic = await id(T['แชทC']);
+  const c = await client(T['แชทC'], 'ทุกคน');
+  a.send(JSON.stringify({ type: 'invite', to: ic, channel: 'กลุ่มเชิญทดสอบ' }));
+  await c.wait('invite');
+  c.send(JSON.stringify({ type: 'invite_reply', channel: 'กลุ่มเชิญทดสอบ', accept: false }));
+  assert.equal((await c.wait('invite_done')).accept, false);
+  assert.equal((await a.wait('invite_answer')).accept, false, 'คนเชิญรู้ว่าอีกฝ่ายปฏิเสธ');
+  c.send(JSON.stringify({ type: 'join', token: T['แชทC'], channel: 'กลุ่มเชิญทดสอบ' }));
+  assert.equal((await c.wait('error')).code, 'locked', 'ปฏิเสธแล้วเข้าไม่ได้');
+  a.close(); b.close(); c.close();
   await call('DELETE', '/api/channels/' + room.body.id, T['แชทA']);
 });
 
@@ -395,7 +412,11 @@ test('ผู้สร้างกลุ่มนำคนออก: ถูกต
   a.send(JSON.stringify({ type: 'invite', to: ib, channel: 'กลุ่มนำออกทดสอบ' }));
   await b.wait('invite');
   b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: 'กลุ่มนำออกทดสอบ' }));
-  assert.equal((await b.wait('joined')).channel, 'กลุ่มนำออกทดสอบ', 'เชิญแล้วเข้าได้อีก');
+  assert.equal((await b.wait('error')).code, 'banned', 'เชิญแล้วแต่ยังไม่กดยอมรับ = ยังเข้าไม่ได้');
+  b.send(JSON.stringify({ type: 'invite_reply', channel: 'กลุ่มนำออกทดสอบ', accept: true }));
+  await b.wait('invite_done');
+  b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: 'กลุ่มนำออกทดสอบ' }));
+  assert.equal((await b.wait('joined')).channel, 'กลุ่มนำออกทดสอบ', 'ยอมรับคำเชิญแล้วเข้าได้อีก');
   b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: '' }));
   assert.equal((await b.wait('joined')).channel, 'ทุกคน', 'ออกจากกลุ่มแล้วกลับมาห้องรวม ทุกคน (ยังเชื่อมต่ออยู่)');
   a.close(); b.close(); c.close();

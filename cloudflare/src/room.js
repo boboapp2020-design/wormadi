@@ -405,17 +405,33 @@ export class WalkieRoom extends DurableObject {
           try {
             const now = Date.now();
             await this.env.DB.batch([
-              // an invite to a locked room also lets that person in (no password needed)
-              ...(meta.locked ? [this.env.DB.prepare('INSERT OR IGNORE INTO channel_access (channel_id, user_id, ts) VALUES (?, ?, ?)').bind(meta.id, to, now)] : []),
-              this.env.DB.prepare('DELETE FROM channel_bans WHERE channel_id = ? AND user_id = ?').bind(meta.id, to),
+              // pending until the invitee accepts: no access is given yet
+              this.env.DB.prepare('INSERT OR REPLACE INTO room_invites (channel_id, user_id, from_id, ts) VALUES (?, ?, ?, ?)').bind(meta.id, to, me.uid, now),
               this.env.DB.prepare('INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, ?, ?, ?, ?, ?)')
-                .bind(now, to, 'invite', `${me.name} เชิญคุณเข้ากลุ่ม "${ch}"`, 'แตะเพื่อเข้ากลุ่ม', 'room:' + ch),
+                .bind(now, to, 'invite', `${me.name} เชิญคุณเข้ากลุ่ม "${ch}"`, 'แตะเพื่อตอบรับ', 'room:' + ch),
             ]);
           } catch (e) { console.error('invite failed', e); }
         }
         const targets = this.authed().filter(o => this.info(o).uid === to);
         for (const o of targets) this.send(o, { type: 'invite', from: { id: me.uid, name: me.name, dept: me.dept }, channel: ch, locked: !!meta.locked });
         this.send(ws, { type: 'invite_sent', to, channel: ch, online: targets.length > 0 });
+        break;
+      }
+      case 'invite_reply': {                   // the invitee accepts or declines; only then can they enter
+        const ch = String(msg.channel || ''), accept = !!msg.accept, meta = this.meta.get(ch);
+        if (!me.uid || !meta || !this.env.DB) return;
+        const inv = await this.env.DB.prepare('SELECT from_id FROM room_invites WHERE channel_id = ? AND user_id = ?').bind(meta.id, me.uid).first();
+        if (!inv) return this.send(ws, { type: 'error', code: 'invite', message: 'คำเชิญนี้ใช้ไม่ได้แล้ว' });
+        const now = Date.now();
+        await this.env.DB.batch([
+          this.env.DB.prepare('DELETE FROM room_invites WHERE channel_id = ? AND user_id = ?').bind(meta.id, me.uid),
+          ...(accept ? [
+            this.env.DB.prepare('INSERT OR IGNORE INTO channel_access (channel_id, user_id, ts) VALUES (?, ?, ?)').bind(meta.id, me.uid, now),
+            this.env.DB.prepare('DELETE FROM channel_bans WHERE channel_id = ? AND user_id = ?').bind(meta.id, me.uid),
+          ] : []),
+        ]);
+        this.send(ws, { type: 'invite_done', channel: ch, accept });
+        for (const o of this.authed().filter(o => this.info(o).uid === inv.from_id)) this.send(o, { type: 'invite_answer', channel: ch, name: me.name, accept });
         break;
       }
       case 'call': {                           // private walkie call to someone who is online
