@@ -359,3 +359,9 @@ input.masked.show { -webkit-text-security: none; text-security: none; }
 .rchip.add { border-style:dashed; }
 .hearbar { display:flex; align-items:center; justify-content:center; gap:8px; margin:8px 14px 0; padding:8px 12px; border-radius:14px; background:#17803d; color:#fff; font-size:15px; }
 .hearbar svg.i { width:20px; height:20px; flex:none; }
+
+/* user guide: short steps with icons */
+.guide { list-style:none; margin:4px 0 14px; padding:0; display:flex; flex-direction:column; gap:12px; }
+.guide li { display:flex; gap:12px; align-items:flex-start; font-size:16px; line-height:1.45; }
+.guide .gi { width:38px; height:38px; flex:none; border-radius:12px; display:grid; place-items:center; background:var(--primary-soft); color:var(--primary-fg); }
+.guide .gi svg.i { width:22px; height:22px; }

@@ -296,7 +296,7 @@ function renderRoomChips() {
   const box = $('roomChips'); if (!box || !S.me || !ACC()) return;
   const rooms = (S.me.rooms || [S.me.channel]).filter(Boolean);
   const talkingIn = new Set((S.roster || []).filter(u => u.talking).flatMap(u => u.rooms || []));
-  box.innerHTML = '<span class="small">ฟังอยู่ ' + rooms.length + ' ห้อง:</span>' + rooms.map(r => `<button type="button" class="rchip ${r === S.me.channel ? 'on' : ''}" data-room="${esc(r)}" aria-pressed="${r === S.me.channel}">${S.hearing && S.hearing.channel === r ? '🔊 ' : ''}${esc(roomLabel(r))}${r === S.me.channel ? ' · พูด' : ''}</button>`).join('')
+  box.innerHTML = '<span class="small">ฟังอยู่:</span>' + rooms.map(r => `<button type="button" class="rchip ${r === S.me.channel ? 'on' : ''}" data-room="${esc(r)}" aria-pressed="${r === S.me.channel}">${S.hearing && S.hearing.channel === r ? '🔊 ' : ''}${esc(roomLabel(r))}${r === S.me.channel ? ' · พูด' : ''}</button>`).join('')
     + '<button type="button" class="rchip add" data-room-add>+ เพิ่มห้อง</button>';
   for (const b of $$('[data-room]', box)) b.onclick = () => setTalkRoom(b.dataset.room);
   const add = box.querySelector('[data-room-add]'); if (add) add.onclick = () => go('channels', { then: 'ptt' });
@@ -744,7 +744,7 @@ ROUTES.login = () => {
       <div class="field">${icon('lock', 'i lead')}<input id="pw" name="wm-pin" ${secretAttrs('รหัสผ่าน')}>
         <button type="button" class="ib trail" id="eye" aria-label="แสดงรหัสผ่าน">${icon('eyeoff')}</button></div>
       <label class="check"><input type="checkbox" id="remember" checked> จดจำการเข้าสู่ระบบ</label>
-      <p class="small muted" style="margin:2px 4px 0">1 บัญชีใช้ได้ทีละ 1 เครื่อง เข้าเครื่องใหม่ เครื่องเดิมจะออกจากระบบอัตโนมัติ</p>`
+      <p class="small muted" style="margin:2px 4px 0">ใช้ได้ทีละ 1 เครื่อง</p>`
       : `<div class="field">${icon('user', 'i lead')}<input id="lname" placeholder="ชื่อของคุณ" maxlength="24"></div>
       <div class="field">${icon('brief', 'i lead')}<input id="ldept" placeholder="ฝ่าย / แผนก" maxlength="32"></div>`}
       <div class="err" id="lerr" role="alert"></div>
@@ -896,7 +896,7 @@ ROUTES.home = () => {
     </div>
     ${installBar()}
     ${pushState() === 'off' ? `<button class="card" id="pushAsk" style="display:flex;align-items:center;gap:12px;margin:10px 14px 4px;padding:14px;width:calc(100% - 28px);text-align:left;border:2px solid #cf2020;color:var(--text)">
-      <span class="ic" style="background:#cf2020;color:#fff">${icon('siren')}</span><span class="grow"><b>เปิดการแจ้งเตือนเหตุฉุกเฉิน</b><br><span class="small muted">ให้เครื่องดังเมื่อมีเหตุ แม้ปิดแอปอยู่ (แตะ แล้วกด "อนุญาต")</span></span>${icon('chev')}</button>` : ''}
+      <span class="ic" style="background:#cf2020;color:#fff">${icon('siren')}</span><span class="grow"><b>เปิดการแจ้งเตือนเหตุฉุกเฉิน</b><br><span class="small muted">แตะแล้วกด “อนุญาต”</span></span>${icon('chev')}</button>` : ''}
     ${S.me && !S.me.channel ? `<button class="card" data-to="channels" style="display:flex;align-items:center;gap:12px;margin:10px 14px 4px;padding:14px;width:calc(100% - 28px);text-align:left;border:2px solid var(--primary);color:var(--text)">
       <span class="ic" style="background:var(--primary);color:#fff">${icon('team')}</span><span class="grow"><b>ยังไม่ได้เข้ากลุ่ม</b><br><span class="small muted">แตะเพื่อเลือกกลุ่ม หรือสร้างกลุ่มใหม่</span></span>${icon('chev')}</button>` : ''}
     <div class="tiles6">
@@ -934,7 +934,7 @@ ROUTES.ptt = () => {
     <header class="hd safe-top"><button class="ib" data-back aria-label="กลับ">${icon('back')}</button><h1>Walkie Talkie</h1>
       <button class="ib" id="spk" aria-label="${S.prefs.speaker ? 'ปิดเสียงลำโพง' : 'เปิดเสียงลำโพง'}">${icon(S.prefs.speaker ? 'volume' : 'mute')}</button></header>
     <div class="hearbar hidden" id="hearBar" role="status" aria-live="polite"></div>
-    <div class="lbl2">ห้องที่จะพูด (กดค้างแล้วพูดเข้าห้องนี้)</div>
+    <div class="lbl2">พูดเข้าห้อง</div>
     <button class="chcard" id="chPick">${ch ? chanIcon(ch) : `<span class="ic">${icon('radio')}</span>`}
       <span class="grow"><b class="ell">${esc(ch ? ch.name : S.me ? 'ยังไม่ได้เข้าห้อง – แตะเพื่อเลือก/สร้างห้อง' : 'กำลังเชื่อมต่อ…')}</b><small>${icon('user')}<span data-chcount></span></small></span>${icon('down')}</button>
     <div class="roomchips" id="roomChips" aria-label="ห้องที่ฟังอยู่"></div>
@@ -948,11 +948,10 @@ ROUTES.ptt = () => {
       ${ch && ch.dm ? `<button class="btn sm" id="hangUp" type="button" style="background:#cf2020;color:#fff;border-color:#cf2020">${icon('x')}วางสาย</button>` : ''}
       <button class="btn sm" id="toChat" type="button">${icon('chat')}พิมพ์ / ฟังย้อนหลัง</button>
       ${ch && ch.id ? `<button class="btn sm" id="shareRoom" type="button">${icon('send')}แชร์ห้อง</button>` : ''}</div>
-    ${ch && ch.lobby ? `<p class="small" style="text-align:center;color:var(--ptt-page-muted);margin:0 14px 10px">ห้องรวม: ทุกคนที่ไม่ได้อยู่ในห้องแยกได้ยินคุณ · อยากคุยแยกให้ไปที่ “กลุ่ม” แล้วสร้าง/เข้าห้อง</p>` : ''}
+    ${ch && ch.lobby ? `<p class="small" style="text-align:center;color:var(--ptt-page-muted);margin:0 14px 10px">ทุกคนได้ยินคุณ</p>` : ''}
     ${ch && !ch.dm && !ch.lobby ? `<div style="display:flex;justify-content:center;gap:10px;margin:0 0 10px">
       <button class="btn sm" id="roomPeople" type="button">${icon('team')}สมาชิกในกลุ่ม</button>
       <button class="btn sm" id="leaveRoom" type="button" style="color:#fff;background:#cf2020;border-color:#cf2020">${icon('logout')}ออกจากกลุ่ม</button></div>` : ''}
-    <p class="small web-only" style="text-align:center;color:var(--ptt-page-muted);margin:0 0 14px">บนคอมพิวเตอร์ กด Spacebar ค้างไว้เพื่อพูดได้</p>
   </div>`, root => {
     bindBack(root);
     bindPtt($('pttBig'));
@@ -1029,7 +1028,7 @@ function shareRoom(c) {
   let svg = '';
   try { const q = qrcode(0, 'M'); q.addData(url); q.make(); svg = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }); } catch {}
   sheet(`<h3 class="row" style="gap:8px">${icon('send')}แชร์ห้อง “${esc(c.name)}”</h3>
-    <p class="small muted" style="margin-top:0">ให้เพื่อนสแกน QR หรือเปิดลิงก์ จะเข้าห้องนี้ทันทีหลังเข้าสู่ระบบ${c.locked ? '<br><b>ห้องนี้มีรหัส</b> บอกรหัสห้องให้เพื่อนแยกต่างหาก (ลิงก์ไม่มีรหัสติดไปด้วย)' : ''}</p>
+    <p class="small muted" style="margin-top:0">สแกน QR หรือเปิดลิงก์เพื่อเข้าห้อง${c.locked ? ' · <b>ห้องมีรหัส</b> บอกรหัสแยกต่างหาก' : ''}</p>
     <div class="qr">${svg}</div><div style="text-align:center;font-size:14px;word-break:break-all;margin:6px 0 12px">${esc(url)}</div>
     ${navigator.share ? `<button class="btn primary" id="shNative" type="button">${icon('send')}แชร์ไปยัง LINE / แอปอื่น</button>` : ''}
     <button class="btn" id="shCopy" type="button" style="margin-top:10px">คัดลอกลิงก์</button>`, bg => {
@@ -1054,7 +1053,7 @@ async function inviteSheet(u) {
   const rooms = S.channels.filter(c => c.access !== false);
   if (!rooms.length) { closeSheet(); return toast('ยังไม่มีกลุ่มที่คุณเข้าได้ สร้างกลุ่มก่อน'); }
   if (S.conn !== 'online') { closeSheet(); return toast('ยังไม่ได้เชื่อมต่อ'); }
-  sheet(`<h3>เชิญ ${esc(u.name)} เข้ากลุ่ม</h3><p class="small muted" style="margin-top:0">เลือกกลุ่ม ${u.online ? 'เขาจะได้รับคำเชิญทันที' : 'เขาจะเห็นคำเชิญในการแจ้งเตือนเมื่อเข้าแอป'} · กลุ่มที่มีรหัส คนที่ได้รับเชิญเข้าได้โดยไม่ต้องใส่รหัส</p>
+  sheet(`<h3>เชิญ ${esc(u.name)} เข้ากลุ่ม</h3><p class="small muted" style="margin-top:0">เลือกห้อง</p>
     <div class="list" style="margin:0">${rooms.map(c => `<button class="li" data-inv="${esc(c.name)}">${chanIcon(c)}<div class="grow"><div class="t1 ell">${esc(c.name)} ${c.locked ? icon('lock') : ''}</div><div class="t2">${S.counts[c.name] || 0} คนออนไลน์</div></div><span class="chev">${icon('chev')}</span></button>`).join('')}</div>`, bg => {
     for (const b of $$('[data-inv]', bg)) b.onclick = () => { sendMsg({ type: 'invite', to: u.id, channel: b.dataset.inv }); closeSheet(); };
   });
@@ -1145,7 +1144,7 @@ function leaveRoom(ask = true, room) {
   };
   if (!ask) return go2();
   sheet(`<div style="text-align:center"><h3>ออกจากกลุ่ม “${esc(ch)}” ?</h3>
-    <p class="small muted" style="margin:4px 0 16px">จะไม่ได้ยินเสียงในกลุ่มนี้ (ยังได้รับแจ้งเหตุฉุกเฉินตามปกติ)</p>
+    <p class="small muted" style="margin:4px 0 16px">จะไม่ได้ยินเสียงห้องนี้</p>
     <div style="display:flex;gap:10px"><button class="btn" id="lvNo" type="button">ยกเลิก</button><button class="btn" id="lvYes" type="button" style="background:#cf2020;color:#fff;border-color:#cf2020">${icon('logout')}ออกจากกลุ่ม</button></div></div>`, () => {
     $('lvNo').onclick = closeSheet; $('lvYes').onclick = go2;
   });
@@ -1178,7 +1177,7 @@ function enterRoom(name, then, opts = {}) {
 }
 function askRoomPass(c, then) {
   sheet(`<h3 class="row" style="gap:8px">${icon('lock')}${esc(c.name)}</h3>
-    <p class="muted" style="margin-top:0">ห้องนี้มีรหัส ขอรหัสจากผู้สร้างห้อง${c.creator_name ? ` (${esc(c.creator_name)})` : ''} ใส่ครั้งเดียว ครั้งต่อไปเข้าได้เลย</p>
+    <p class="muted" style="margin-top:0">ขอรหัสจากผู้สร้างห้อง${c.creator_name ? ` (${esc(c.creator_name)})` : ''} (ใส่ครั้งเดียว)</p>
     <form id="rpf" novalidate><div class="field">${icon('lock', 'i lead')}<input id="rp" type="password" placeholder="รหัสห้อง" autocomplete="off" maxlength="32"></div>
     <div class="err" id="rperr" role="alert"></div><button class="btn primary" id="rpb">เข้าห้อง</button></form>`, () => {
     $('rpf').onsubmit = async e => {
@@ -1199,7 +1198,7 @@ function createRoomSheet(then) {
     <label class="lbl" for="crn">ชื่อห้อง</label><div class="field plain"><input id="crn" maxlength="40" placeholder="เช่น ทีมหม้อต้ม กะ A" autocomplete="off"></div>
     <label class="lbl" for="crs">คำอธิบาย (ไม่ใส่ก็ได้)</label><div class="field plain"><input id="crs" maxlength="60" placeholder="เช่น คุยงานซ่อมหม้อไอน้ำ" autocomplete="off"></div>
     <label class="lbl">สีห้อง</label><div class="row" id="crc" style="gap:10px;flex-wrap:wrap;margin:14px 2px 4px">${colors.map((c, i) => `<button type="button" class="ic c-${c}" data-c="${c}" aria-label="สี ${c}" aria-pressed="${i === 0}" style="border:0;outline-offset:2px;${i === 0 ? 'outline:3px solid var(--primary)' : ''}">${icon('radio')}</button>`).join('')}</div>
-    <label class="setrow" style="padding:14px 2px;border:0">${icon('lock', 'i lead')}<div class="grow"><b>ตั้งรหัสห้อง</b><small>ไม่ตั้ง = ทุกคนเข้าได้ · ตั้ง = ต้องใส่รหัสก่อนเข้า (ครั้งเดียว)</small></div><input type="checkbox" class="sw" id="crl"></label>
+    <label class="setrow" style="padding:14px 2px;border:0">${icon('lock', 'i lead')}<div class="grow"><b>ตั้งรหัสห้อง</b><small>คนอื่นต้องใส่รหัสก่อนเข้า</small></div><input type="checkbox" class="sw" id="crl"></label>
     <div class="field hidden" id="crpw">${icon('lock', 'i lead')}<input id="crp" type="text" placeholder="รหัสห้อง 4–32 ตัว" autocomplete="off" maxlength="32"></div>
     <div class="err" id="crerr" role="alert"></div>
     <button class="btn primary" id="crb">สร้างห้องและเข้าห้อง</button></form>`, bg => {
@@ -1599,7 +1598,7 @@ ROUTES.tasks = async p => {
     <div class="tabs"><button data-t="up" class="${tab === 'up' ? 'on' : ''}">ที่จะเตือน</button><button data-t="all" class="${tab === 'all' ? 'on' : ''}">ทั้งหมด</button><button data-t="done" class="${tab === 'done' ? 'on' : ''}">เสร็จแล้ว</button></div>
     <div class="scroll"><div style="padding:6px 14px 0"><button class="btn primary" id="newNote2" type="button">${icon('plus')}บันทึกใหม่ / ตั้งเตือน</button></div>
     <div class="list" id="rl"><div class="empty">กำลังโหลด…</div></div>
-    <p class="small muted" style="padding:0 18px 18px">บันทึกเห็นได้เฉพาะคุณ · ถึงเวลาเครื่องจะดังและสั่น (เปิด "ได้ยินเสียงเมื่อพับ / ปิดแอป" ไว้ หรือใช้แอป Android เพื่อให้ดังแม้ปิดแอป)</p></div></div>`, root => {
+    <p class="small muted" style="padding:0 18px 18px">เห็นได้เฉพาะคุณ</p></div></div>`, root => {
     bindBack(root);
     for (const x of $$('[data-t]', root)) x.onclick = () => go('tasks', { tab: x.dataset.t }, true);
     $('newNote').onclick = $('newNote2').onclick = () => noteSheet();
@@ -1690,7 +1689,7 @@ ROUTES.sos = p => {
   let pos = null;
   mount(`<div class="sospage">
     <div class="soshead"><button class="ib back" data-back aria-label="กลับ">${icon('back')}</button><h1>แจ้งเหตุฉุกเฉิน</h1>
-      <div style="margin-top:8px;font-size:16px;line-height:1.5">กดค้างปุ่มด้านล่าง 1 วินาที<br><b>ทุกเครื่องที่เข้าสู่ระบบจะมีเสียงเตือนทันที</b><br>พร้อมแสดงชื่อคนแจ้งและตำแหน่ง</div></div>
+      <div style="margin-top:8px;font-size:16px;line-height:1.5">กดค้าง 1 วินาที<br><b>ทุกเครื่องดังทันที</b></div></div>
     <div class="sosone">
       <button class="sosring" id="sosHold" type="button" aria-label="กดค้าง 1 วินาทีเพื่อแจ้งเหตุฉุกเฉิน">
         <span class="fill" id="sosFill"></span>
@@ -1886,8 +1885,8 @@ ROUTES.settings = () => {
       ${row('sLang', 'globe', 'ภาษา', '', '<span class="small muted">ไทย</span>')}
       ${row('sTheme', curTheme() === 'dark' ? 'moon' : 'sun', 'ธีม', '', `<span class="small muted">${curTheme() === 'dark' ? 'กลางคืน (มืด)' : 'ภาคสนาม (สว่าง)'}</span>`)}
       <label class="setrow web-only">${icon('sun', 'i lead')}<div class="grow"><b>เปิดจอค้างไว้ระหว่างใช้งาน</b><small>ได้ยินเสียงแน่นอนที่สุดสำหรับเว็บแอป</small></div><input type="checkbox" class="sw" id="optWake" ${wakeOn() ? 'checked' : ''}></label>
-      <div class="setrow" style="background:color-mix(in srgb, #cf2020 8%, transparent)">${icon('siren', 'i lead')}<div class="grow"><b>เหตุฉุกเฉิน (SOS) ดังเสมอ</b><small>เข้าสู่ระบบอยู่ = ได้ยินทุกครั้ง แม้พับหรือปิดแอป · หยุดเมื่อออกจากระบบเท่านั้น${pushState() === 'off' ? ' · <b style="color:var(--err-fg)">ยังไม่ได้อนุญาตการแจ้งเตือน</b>' : ''}</small></div>${pushState() === 'off' ? '<button class="btn sm primary" id="sPush" type="button">อนุญาต</button>' : '<span class="small muted">เปิดอยู่</span>'}</div>
-      <label class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินเสียงคุยเมื่อพับ / ปิดแอป</b><small>${NATIVE ? 'เปิด = ได้ยินแม้พับแอป ปิดจอ หรือปัดปิดแอป · ปิด = เงียบเมื่อออกจากหน้าแอป' : IOS ? 'เปิด = ได้ยินขณะพับแอปชั่วครู่ (iPhone อาจหยุดเสียงเมื่อพับนาน)' : 'เปิด = ได้ยินเมื่อพับแอปหรือปิดจอ · ถ้าปัดปิดแอปทิ้ง ให้ใช้แอป Android'}</small></div><input type="checkbox" class="sw" id="optKeep" ${keepOn() ? 'checked' : ''}></label>
+      <div class="setrow" style="background:color-mix(in srgb, #cf2020 8%, transparent)">${icon('siren', 'i lead')}<div class="grow"><b>เหตุฉุกเฉิน (SOS) ดังเสมอ</b><small>ดังเสมอเมื่อเข้าสู่ระบบ${pushState() === 'off' ? ' · <b style="color:var(--err-fg)">ยังไม่ได้อนุญาตการแจ้งเตือน</b>' : ''}</small></div>${pushState() === 'off' ? '<button class="btn sm primary" id="sPush" type="button">อนุญาต</button>' : '<span class="small muted">เปิดอยู่</span>'}</div>
+      <label class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินเสียงคุยเมื่อพับ / ปิดแอป</b><small>${NATIVE ? 'ได้ยินแม้ปิดแอป' : IOS ? 'iPhone อาจเงียบเมื่อพับนาน' : 'ได้ยินเมื่อพับแอปหรือปิดจอ'}</small></div><input type="checkbox" class="sw" id="optKeep" ${keepOn() ? 'checked' : ''}></label>
       ${!NATIVE && !standalone() ? row('sInstall', 'download', 'ติดตั้งแอปลงหน้าจอ', installEvt ? 'แตะเพื่อติดตั้ง ใช้งานเต็มจอเหมือนแอป' : IOS ? 'Safari: ปุ่มแชร์ > เพิ่มไปยังหน้าจอโฮม' : 'แตะเพื่อดูวิธีติดตั้ง') : ''}
       ${NATIVE ? row('sBatt', 'battery', 'ให้แอปทำงานตอนจอดับ', 'ปิดการประหยัดแบตเตอรี่') : ''}
     </div>
@@ -1899,7 +1898,7 @@ ROUTES.settings = () => {
       ${admin ? row('sAdmin', 'settings', 'จัดการระบบ (Admin)', 'สมาชิก กลุ่ม สิทธิ์ ประกาศ') : ''}
     </div>
     <div class="list">
-      ${row('sHelp', 'help', 'ช่วยเหลือ / คู่มือการใช้งาน')}
+      ${row('sHelp', 'help', 'วิธีใช้')}
       ${row('sAbout', 'info', 'เกี่ยวกับแอป')}
       <button class="setrow" id="sOut" style="width:100%;background:none;border:0;text-align:left;color:var(--err-fg)">${icon('logout', 'i lead')}<div class="grow"><b>ออกจากระบบ</b></div></button>
     </div></div></div>`, root => {
@@ -1920,21 +1919,23 @@ ROUTES.settings = () => {
   });
 };
 function help() {
-  sheet(`<h3>ช่วยเหลือ / คู่มือ</h3><ul style="padding-left:20px;line-height:1.7;font-size:15px">
-    <li><b>กดค้าง</b>ปุ่มสีส้มเพื่อพูด ปล่อยเพื่อจบ พูดได้ทีละคนต่อช่อง ครั้งละไม่เกิน 60 วินาที</li>
-    <li>ปุ่ม <b style="color:var(--talk-fg)">สีแดง</b> = คุณกำลังพูด · <b style="color:var(--listen-fg)">สีเขียว</b> = กำลังรับฟัง</li>
-    <li>เปลี่ยนช่อง: แตะการ์ด "ช่องสื่อสารปัจจุบัน" หรือเมนู "กลุ่ม"</li>
-    <li>ข้อความ: พิมพ์แล้วกดส่ง หรือกดค้างปุ่มไมค์เพื่อพูด แตะ ▶ เพื่อฟังย้อนหลัง</li>
-    <li><b>แจ้งเหตุฉุกเฉิน</b>: เลือกประเภท แล้วกดค้างปุ่มแดง 1 วินาที ทุกเครื่องจะมีเสียงไซเรน</li>
-    <li>สร้างห้องเอง: เมนู <b>กลุ่ม</b> → <b>สร้างห้องใหม่</b> ตั้งรหัสห้องหรือไม่ก็ได้ ห้องที่มีรหัส คนอื่นต้องใส่รหัสครั้งแรกก่อนเข้า</li>
-    <li class="web-only">ติดตั้งแอปลงหน้าจอ แล้วพับแอปไว้ได้ ยังได้ยินเสียงเพื่อน (Android) · iPhone ให้เปิดแอปค้างไว้</li></ul>
-    ${!NATIVE && !standalone() ? '<button class="btn primary" type="button" id="hInstall">ติดตั้งแอปลงหน้าจอ</button>' : ''}`, () => { const b = $('hInstall'); if (b) b.onclick = doInstall; });
+  const step = (ic, title, text) => `<li><span class="gi">${icon(ic)}</span><div><b>${title}</b><br>${text}</div></li>`;
+  sheet(`<h3>วิธีใช้</h3><ol class="guide">
+    ${step('mic', 'พูด', 'กดค้างปุ่มใหญ่ พูด แล้วปล่อย')}
+    ${step('radio', 'สีปุ่ม', '<b style="color:#e07000">ส้ม</b> พร้อม · <b style="color:var(--talk-fg)">แดง</b> คุณพูด · <b style="color:var(--listen-fg)">เขียว</b> มีคนพูด')}
+    ${step('team', 'ห้อง', 'เริ่มที่ “ทุกคน” · เมนู กลุ่ม = เข้า/สร้างห้อง · แตะชื่อห้องใต้ปุ่มพูด = เลือกห้องที่จะพูด')}
+    ${step('chat', 'แชท', 'แตะ “พิมพ์ / ฟังย้อนหลัง” · ▶ = ฟังเสียงย้อนหลัง')}
+    ${step('user', 'คุยส่วนตัว', 'สมาชิกทีมงาน → แตะชื่อ → วอ หรือ แชท')}
+    ${step('siren', 'ฉุกเฉิน', 'SOS → กดค้าง 1 วินาที ทุกเครื่องดัง')}
+    ${step('bell', 'เตือน', 'บันทึก / เตือน → ตั้งเวลา')}
+  </ol>
+  ${!NATIVE && !standalone() ? '<button class="btn primary" type="button" id="hInstall">ติดตั้งแอปลงหน้าจอ</button>' : ''}`, () => { const b = $('hInstall'); if (b) b.onclick = doInstall; });
 }
 function about() {
   sheet(`<div style="text-align:center"><img class="appicon-img" src="brand/app-icon.png" alt="" style="width:84px;height:84px;margin:6px auto">
     <img class="wordmark-img" src="brand/wordmark.png" alt="WORMADI" style="margin:6px auto 0"><div class="muted">Walkie Talkie สำหรับทีมงานโรงงาน · เวอร์ชัน 2.1</div>
     <div style="margin:12px 0">${orgLogo()}</div><div style="font-weight:600">${esc(S.config.org)}</div>
-    <p class="small muted">เสียงที่พูดถูกบันทึกเพื่อฟังย้อนหลัง ${S.config.recording ? 'และลบอัตโนมัติตามระยะเวลาที่กำหนด' : '(ยังไม่เปิดระบบบันทึกเสียง)'} · ข้อความและประวัติการใช้งานเก็บเพื่อความปลอดภัยของทีม</p></div>`);
+    <p class="small muted">เสียงและข้อความเก็บ 3 วัน แล้วลบอัตโนมัติ</p></div>`);
 }
 
 // ---------------------------------------------------------------- 15 admin
@@ -2063,7 +2064,7 @@ function invite() {
   const url = inviteUrl();
   let svg = '';
   try { const q = qrcode(0, 'M'); q.addData(url); q.make(); svg = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }); } catch {}
-  sheet(`<h3>เชิญเพื่อนร่วมทีม</h3><p class="small muted">ให้เพื่อนสแกน QR นี้ด้วยกล้องมือถือ แล้วเข้าสู่ระบบด้วยรหัสพนักงานของตัวเอง (ผู้ดูแลระบบเป็นคนสร้างบัญชีให้)</p>
+  sheet(`<h3>เชิญเพื่อนร่วมทีม</h3><p class="small muted">ให้เพื่อนสแกน QR แล้วเข้าด้วยรหัสพนักงาน</p>
     <div class="qr">${svg}</div><div style="text-align:center;font-size:14px;word-break:break-all">${esc(url)}</div>
     <button class="btn" id="cp" style="margin-top:12px">คัดลอกลิงก์</button>`, bg => {
     bg.querySelector('#cp').onclick = async () => { try { await navigator.clipboard.writeText(url); toast('คัดลอกแล้ว'); } catch { toast('คัดลอกไม่ได้'); } };
@@ -2131,7 +2132,7 @@ function installBar() {
   if (NATIVE || standalone()) return '';
   let until = 0; try { until = Number(localStorage.getItem('walkie_install_later')) || 0; } catch {}
   if (until > Date.now()) return '';
-  return `<div class="install-bar" data-install><img src="brand/app-icon.png" alt=""><div class="grow"><b>ติดตั้ง WORMADI ลงหน้าจอ</b><small>เปิดเร็ว เต็มจอ และฟังต่อได้เมื่อพับแอป</small></div>
+  return `<div class="install-bar" data-install><img src="brand/app-icon.png" alt=""><div class="grow"><b>ติดตั้ง WORMADI ลงหน้าจอ</b><small>เปิดง่าย เต็มจอ</small></div>
     <button class="btn primary sm" type="button" data-install-go>ติดตั้ง</button><button class="ib" type="button" data-install-x aria-label="ไว้ทีหลัง">${icon('x')}</button></div>`;
 }
 function bindInstallBar(root) {
