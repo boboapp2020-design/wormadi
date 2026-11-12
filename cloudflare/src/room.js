@@ -277,9 +277,6 @@ export class WalkieRoom extends DurableObject {
           if (this.info(ws).channel) return;     // stay in the current room
           ch = null;
         }
-        if (!ch) {                               // first open room (or one this user may enter)
-          for (const name of this.channels) if (await this.canEnter(name, uid, role)) { ch = name; break; }
-        }
         const cur = this.info(ws);
         if (!ch) {                               // no rooms yet: signed in, waiting for someone to create one
           if (cur.channel) this.leave(ws);
@@ -318,6 +315,27 @@ export class WalkieRoom extends DurableObject {
       case 'ptt_end':
         if (this.talker.get(me.channel)?.ws === ws) await this.releaseFloor(me.channel);
         break;
+      case 'invite': {                         // invite someone into a room I can enter
+        const to = Number(msg.to), ch = String(msg.channel || '');
+        if (!me.uid || !to || to === me.uid || !this.channels.includes(ch)) return;
+        if (!(await this.canEnter(ch, me.uid, me.role))) return this.send(ws, { type: 'error', code: 'invite', message: 'เชิญได้เฉพาะห้องที่คุณเข้าได้' });
+        const meta = this.meta.get(ch) || {};
+        if (this.env.DB) {
+          try {
+            const now = Date.now();
+            await this.env.DB.batch([
+              // an invite to a locked room also lets that person in (no password needed)
+              ...(meta.locked ? [this.env.DB.prepare('INSERT OR IGNORE INTO channel_access (channel_id, user_id, ts) VALUES (?, ?, ?)').bind(meta.id, to, now)] : []),
+              this.env.DB.prepare('INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, ?, ?, ?, ?, ?)')
+                .bind(now, to, 'invite', `${me.name} เชิญคุณเข้ากลุ่ม "${ch}"`, 'แตะเพื่อเข้ากลุ่ม', 'room:' + ch),
+            ]);
+          } catch (e) { console.error('invite failed', e); }
+        }
+        const targets = this.authed().filter(o => this.info(o).uid === to);
+        for (const o of targets) this.send(o, { type: 'invite', from: { id: me.uid, name: me.name, dept: me.dept }, channel: ch, locked: !!meta.locked });
+        this.send(ws, { type: 'invite_sent', to, channel: ch, online: targets.length > 0 });
+        break;
+      }
       case 'call': {                           // private walkie call to someone who is online
         const to = Number(msg.to);
         if (!me.uid || !to || to === me.uid) return;

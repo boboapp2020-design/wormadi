@@ -43,13 +43,27 @@ const S = {
 const has = f => S.config.features.includes(f);
 const ACC = () => !!S.config.accounts;
 let serverBase = NATIVE ? (lsGet('walkie_server_base') || '') : '';
-// wormadi.pages.dev: some networks block one of its two Cloudflare addresses, so a connection can hang.
-// When that happens, quietly continue through the Worker's own address (same server, same accounts).
-const BACKUP_BASE = !NATIVE && /\.pages\.dev$/.test(location.hostname) ? 'https://walkie.boboapp2020.workers.dev' : '';
+// The same server answers at more than one address. Some networks block some Cloudflare addresses,
+// so when a connection hangs the app quietly moves on to the next address (same server, same accounts).
+//  - on wormadi.pages.dev: this page's own address, then the Worker address
+//  - on GitHub Pages (the second link): the app's screens come from GitHub, the server is still Cloudflare
+const SERVER_ADDRS = ['https://wormadi.pages.dev', 'https://walkie.boboapp2020.workers.dev'];
+const ON_GITHUB = !NATIVE && /\.github\.io$/.test(location.hostname);
+const API_BASES = NATIVE ? [] : ON_GITHUB ? SERVER_ADDRS : /\.pages\.dev$/.test(location.hostname) ? ['', SERVER_ADDRS[1]] : [];
+if (ON_GITHUB) serverBase = SERVER_ADDRS[0];
+const BACKUP_BASE = API_BASES.length ? API_BASES[API_BASES.length - 1] : '';
+function nextBase() {           // move to the next address (returns false when there is none)
+  const i = API_BASES.indexOf(serverBase || '');
+  if (i < 0 || i >= API_BASES.length - 1) return false;
+  serverBase = API_BASES[i + 1]; return true;
+}
 async function netFetch(path, opts = {}) {
-  if (!BACKUP_BASE || serverBase) return fetch((serverBase || '') + path, opts);
-  try { return await fetch(path, { ...opts, signal: AbortSignal.timeout(7000) }); }
-  catch (e) { serverBase = BACKUP_BASE; return fetch(serverBase + path, opts); }
+  if (!API_BASES.length) return fetch((serverBase || '') + path, opts);
+  for (;;) {
+    const last = API_BASES.indexOf(serverBase || '') >= API_BASES.length - 1;
+    try { return await fetch((serverBase || '') + path, last ? opts : { ...opts, signal: AbortSignal.timeout(7000) }); }
+    catch (e) { if (last || !nextBase()) throw e; }
+  }
 }
 let ws, talking = false, wantTalk = false, pressed = false, attempt = 0, reconnectTimer = null, pingTimer = null, stopped = true;
 let audioCtx, outGain, micStream, micSource, processor, rxRate = TARGET_RATE, playHead = 0;
@@ -233,9 +247,10 @@ function connect() {
   ws.binaryType = 'arraybuffer';
   // voice connection that never opens on pages.dev -> switch to the backup address
   let opened = false;
-  const openTimer = BACKUP_BASE && !serverBase ? setTimeout(() => { if (!opened) { serverBase = BACKUP_BASE; attempt = 0; try { sock.close(); } catch {} } }, 6000) : null;
+  const canMove = () => API_BASES.length && API_BASES.indexOf(serverBase || '') < API_BASES.length - 1;
+  const openTimer = canMove() ? setTimeout(() => { if (!opened && nextBase()) { attempt = 0; try { sock.close(); } catch {} } }, 6000) : null;
   sock.addEventListener('open', () => { opened = true; clearTimeout(openTimer); });
-  sock.addEventListener('close', () => { if (!opened && BACKUP_BASE && !serverBase) { serverBase = BACKUP_BASE; attempt = 0; } });
+  sock.addEventListener('close', () => { if (!opened && canMove() && nextBase()) attempt = 0; });
   ws.onopen = () => { joinNow(); clearInterval(pingTimer); pingTimer = setInterval(() => send({ type: 'ping' }), 20000); };
   ws.onclose = () => {
     clearInterval(pingTimer); stopTalking(true);
@@ -256,7 +271,7 @@ function stopConnection() {
 const send = m => ws && ws.readyState === 1 && ws.send(JSON.stringify(m));
 function sendMsg(m) { if (NATIVE) WN.send({ msg: m }); else send(m); }
 function joinNow(channel) {
-  const ch = channel || (S.call && S.call.status === 'active' ? S.call.channel : '') || lsGet('walkie_channel') || (S.user && S.user.main_channel_name) || S.channels[0]?.name;
+  const ch = channel || (S.call && S.call.status === 'active' ? S.call.channel : '') || lsGet('walkie_channel') || '';
   if (NATIVE) return WN.switchChannel({ channel: ch });
   sendMsg({ type: 'join', token: S.token || undefined, name: S.profile.name, dept: S.profile.dept, uid: S.uid, channel: ch });
 }
@@ -343,6 +358,8 @@ function onMessage(m) {
       break;
     case 'sos': showSos(m.sos); break;
     case 'call': incomingCall(m); break;
+    case 'invite': incomingInvite(m); break;
+    case 'invite_sent': toast(m.online ? `ส่งคำเชิญเข้ากลุ่ม "${m.channel}" แล้ว` : `ส่งคำเชิญแล้ว จะเห็นเมื่อเข้าแอป`); break;
     case 'call_ringing': toast(`กำลังเรียก ${S.call?.peer?.name || ''}…`); break;
     case 'call_fail': toast(m.message || 'เรียกไม่สำเร็จ'); endCall(); break;
     case 'call_reply':
@@ -357,6 +374,7 @@ function onMessage(m) {
     case 'error':
       if (m.code === 'auth') { stopConnection(); signOut('ออกจากระบบแล้ว: บัญชีนี้เข้าสู่ระบบจากเครื่องอื่น หรือหมดเวลา กรุณาเข้าสู่ระบบใหม่'); }
       if (m.code === 'replaced') { stopConnection(); signOut(m.message); }
+      if (m.code === 'invite') toast(m.message);
       if (m.code === 'must_change') { stopConnection(); if (S.user) S.user.must_change = 1; go('setpw', {}, true); }
       if (m.code === 'locked') { toast(m.message); loadChannels().then(() => { const c = S.channels.find(x => x.name === m.channel); if (c) askRoomPass(c, S.route); }); }
       if (m.code === 'room_deleted') {
@@ -706,6 +724,7 @@ ROUTES.login = () => {
           if (d.user.must_change) { S.lastPw = pw; return go('setpw', {}, true); }
           await afterSignIn();
           if (pendingJoin()) return go('join', { room: pendingJoin(true) }, true);
+          if (!lsGet('walkie_channel')) { toast('เลือกกลุ่มที่จะเข้า หรือสร้างกลุ่มใหม่'); return go('channels', { then: 'ptt' }, true); }
           go('home', {}, true);
         } catch (e2) { err.textContent = e2.message; }
         finally { if ($('lbtn')) { $('lbtn').disabled = false; $('lbtn').textContent = 'เข้าสู่ระบบ'; } }
@@ -765,7 +784,8 @@ ROUTES.setpw = () => {
         toast('ตั้งรหัสผ่านใหม่แล้ว');
         await afterSignIn();
         if (pendingJoin()) return go('join', { room: pendingJoin(true) }, true);
-        go('home', {}, true);
+        toast('เลือกกลุ่มที่จะเข้า หรือสร้างกลุ่มใหม่');
+        go('channels', { then: 'ptt' }, true);
       } catch (e2) { err.textContent = e2.message; $('pbtn').disabled = false; }
     };
   });
@@ -781,6 +801,8 @@ ROUTES.home = () => {
       <button class="ib" id="bell" aria-label="การแจ้งเตือน">${icon('bell')}<span class="badge hidden" id="bellBadge"></span></button>
     </div>
     ${installBar()}
+    ${S.me && !S.me.channel ? `<button class="card" data-to="channels" style="display:flex;align-items:center;gap:12px;margin:10px 14px 4px;padding:14px;width:calc(100% - 28px);text-align:left;border:2px solid var(--primary);color:var(--text)">
+      <span class="ic" style="background:var(--primary);color:#fff">${icon('team')}</span><span class="grow"><b>ยังไม่ได้เข้ากลุ่ม</b><br><span class="small muted">แตะเพื่อเลือกกลุ่ม หรือสร้างกลุ่มใหม่</span></span>${icon('chev')}</button>` : ''}
     <div class="tiles6">
       <button class="tile wt" data-to="ptt">${icon('mic')}Walkie Talkie<small>(พูดคุยทันที)</small></button>
       <button class="tile grp" data-to="channels">${icon('team')}กลุ่มสื่อสาร</button>
@@ -917,6 +939,29 @@ ROUTES.join = async p => {
   go('channels', {}, true);                // the room list stays underneath (back button / password sheet)
   enterRoom(c.name, 'ptt');
 };
+
+// ---------------------------------------------------------------- invite someone into a group
+async function inviteSheet(u) {
+  await loadChannels();
+  const rooms = S.channels.filter(c => c.access !== false);
+  if (!rooms.length) { closeSheet(); return toast('ยังไม่มีกลุ่มที่คุณเข้าได้ สร้างกลุ่มก่อน'); }
+  if (S.conn !== 'online') { closeSheet(); return toast('ยังไม่ได้เชื่อมต่อ'); }
+  sheet(`<h3>เชิญ ${esc(u.name)} เข้ากลุ่ม</h3><p class="small muted" style="margin-top:0">เลือกกลุ่ม ${u.online ? 'เขาจะได้รับคำเชิญทันที' : 'เขาจะเห็นคำเชิญในการแจ้งเตือนเมื่อเข้าแอป'} · กลุ่มที่มีรหัส คนที่ได้รับเชิญเข้าได้โดยไม่ต้องใส่รหัส</p>
+    <div class="list" style="margin:0">${rooms.map(c => `<button class="li" data-inv="${esc(c.name)}">${chanIcon(c)}<div class="grow"><div class="t1 ell">${esc(c.name)} ${c.locked ? icon('lock') : ''}</div><div class="t2">${S.counts[c.name] || 0} คนออนไลน์</div></div><span class="chev">${icon('chev')}</span></button>`).join('')}</div>`, bg => {
+    for (const b of $$('[data-inv]', bg)) b.onclick = () => { sendMsg({ type: 'invite', to: u.id, channel: b.dataset.inv }); closeSheet(); };
+  });
+}
+function incomingInvite(m) {
+  vibrate([150, 80, 150]); if (!NATIVE) beep(880, 0.12);
+  if (document.hidden) systemNotify(`${m.from.name} เชิญคุณเข้ากลุ่ม`, m.channel, 'inv');
+  if (S.call && S.call.status === 'active') return toast(`${m.from.name} เชิญคุณเข้ากลุ่ม "${m.channel}" (ดูได้ในการแจ้งเตือน)`);
+  sheet(`<div style="text-align:center"><div style="display:flex;justify-content:center;margin:6px 0 10px">${avatar({ id: m.from.id, name: m.from.name, has_avatar: 1 }, 'av')}</div>
+    <h3 style="margin:4px 0">${esc(m.from.name)}</h3><p style="margin:6px 0 16px">เชิญคุณเข้ากลุ่ม <b>“${esc(m.channel)}”</b>${m.locked ? '<br><span class="small muted">กลุ่มนี้มีรหัส แต่คุณได้รับเชิญจึงเข้าได้เลย</span>' : ''}</p>
+    <div style="display:flex;gap:12px"><button class="btn" id="invNo" type="button">ไว้ทีหลัง</button><button class="btn primary" id="invYes" type="button">${icon('team')}เข้ากลุ่ม</button></div></div>`, () => {
+    $('invNo').onclick = closeSheet;
+    $('invYes').onclick = async () => { closeSheet(); await loadChannels(); enterRoom(m.channel, 'ptt'); };
+  });
+}
 
 // ---------------------------------------------------------------- private walkie call (both people online)
 let ringTimer = null, ringStop = null;
@@ -1110,10 +1155,12 @@ function userSheet(u) {
     <div style="color:${u.online ? 'var(--ok-fg)' : 'var(--muted)'};margin-top:4px"><span class="dot ${u.online ? 'on' : ''}"></span> ${u.online ? 'ออนไลน์' + (u.channel ? ' · ' + esc(u.channel) : '') : 'ออฟไลน์'}</div></div>
     <div class="list kv">${kv('building', 'แผนก', u.dept)}${kv('brief', 'ตำแหน่ง', u.position)}${kv('antenna', 'ช่องหลัก', u.main_channel_name)}${kv('shield', 'สิทธิ์การใช้งาน', ROLE_NAME[u.role])}</div>
     ${u.online && S.user && u.id !== S.user.id ? `<button class="btn primary" id="callU">${icon('walkie')}วอหาส่วนตัว</button>` : ''}
+    ${S.user && u.id !== S.user.id ? `<button class="btn" id="invU" style="margin-top:10px">${icon('plus')}เชิญเข้ากลุ่ม</button>` : ''}
     ${u.online && u.channel && u.channel !== 'คุยส่วนตัว' ? `<button class="btn" id="joinU" style="margin-top:10px">${icon('mic')}ไปห้อง ${esc(u.channel)}</button>` : ''}
     ${!u.online && S.user && u.id !== S.user.id ? '<p class="small muted" style="text-align:center">วอหาส่วนตัวได้เมื่อผู้ใช้นี้ออนไลน์อยู่</p>' : ''}`, bg => {
     const j = bg.querySelector('#joinU'); if (j) j.onclick = () => { closeSheet(); enterRoom(u.channel, 'ptt'); };
     const cu = bg.querySelector('#callU'); if (cu) cu.onclick = () => { closeSheet(); startCall(u); };
+    const iv = bg.querySelector('#invU'); if (iv) iv.onclick = () => inviteSheet(u);
     const av = bg.querySelector('.prof .av'); if (av) { av.style.width = '96px'; av.style.height = '96px'; av.style.margin = '0 auto'; }
   });
 }
@@ -1438,7 +1485,7 @@ ROUTES.notifications = async p => {
   });
   let server = [];
   if (ACC()) { try { server = await api('/api/notifications'); } catch {} }
-  const KIND = { sos: ['siren', '#cf2020'], task: ['task', '#6d3fd8'], system: ['info', '#1d63d6'], msg: ['chat', '#178a44'], talk: ['mic', '#0b7f80'] };
+  const KIND = { invite: ['team', '#1d63d6'], sos: ['siren', '#cf2020'], task: ['task', '#6d3fd8'], system: ['info', '#1d63d6'], msg: ['chat', '#178a44'], talk: ['mic', '#0b7f80'] };
   const items = [
     ...server.map(n => ({ ts: n.ts, kind: n.kind, title: n.title, body: n.body, read: n.read, ref: n.ref })),
     ...S.msgAlerts.map(a => ({ ts: a.ts, kind: a.kind === 'talk' ? 'talk' : 'msg', title: `${a.channel}`, body: `${a.name}: ${a.kind === 'talk' ? 'พูด ' + fmtDur(a.ms) : a.text}`, read: a.read, ch: a.channel })),
@@ -1450,6 +1497,7 @@ ROUTES.notifications = async p => {
   for (const b of $$('[data-i]', $('nl'))) b.onclick = () => {
     const n = items[Number(b.dataset.i)];
     if (n.ch) openChatFor(n.ch); else if (n.kind === 'sos') go('sos'); else if (n.kind === 'task') go('tasks');
+    else if (n.kind === 'invite' && String(n.ref || '').startsWith('room:')) loadChannels().then(() => enterRoom(String(n.ref).slice(5), 'ptt'));
   };
   if (ACC()) { api('/api/notifications/read', { method: 'POST' }).then(() => { S.unread = 0; renderBadges(); }).catch(() => {}); }
   S.msgAlerts.forEach(a => (a.read = true)); lsSet('walkie_alerts', JSON.stringify(S.msgAlerts)); renderBadges();
@@ -1735,7 +1783,7 @@ ROUTES.report = async p => {
 };
 
 // ================================================================ QR invite / scan
-function inviteUrl() { return (NATIVE ? serverBase : location.origin) + '/'; }
+function inviteUrl() { return NATIVE ? (serverBase || SERVER_ADDRS[0]) + '/' : location.origin + location.pathname.replace(/[^/]*$/, ''); }
 function invite() {
   const url = inviteUrl();
   let svg = '';
@@ -1864,7 +1912,7 @@ async function probeServer() {
 }
 async function nativeJoin() {
   try { await WN.ensurePermissions(); } catch {}
-  const ch = lsGet('walkie_channel') || (S.user && S.user.main_channel_name) || S.channels[0]?.name || '';
+  const ch = lsGet('walkie_channel') || '';
   try { await WN.join({ server: serverBase, name: S.user ? S.user.name : S.profile.name, dept: S.user ? S.user.dept : S.profile.dept || '', code: S.token || '', uid: S.uid, channel: ch }); setConn('connecting'); }
   catch (e) { toast('เริ่มบริการไม่ได้: ' + (e.message || e)); }
 }

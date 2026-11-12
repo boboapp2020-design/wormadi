@@ -322,6 +322,30 @@ test('วอส่วนตัว: เรียกคนที่ออนไล
   a.close(); b.close(); c.close();
 });
 
+test('เชิญเข้ากลุ่ม: เชิญจากโปรไฟล์ -> อีกฝ่ายได้รับทันที + แจ้งเตือน, กลุ่มมีรหัสเข้าได้โดยไม่ต้องใส่รหัส; เข้าแอปครั้งแรกไม่มีกลุ่ม', async () => {
+  const id = async tk => (await call('GET', '/api/me', tk)).body.user.id;
+  const ib = await id(T['แชทB']);
+  const room = await call('POST', '/api/channels', T['แชทA'], { name: 'กลุ่มเชิญทดสอบ', password: 'pass9' });
+  assert.equal(room.status, 200);
+  const a = await client(T['แชทA'], 'กลุ่มเชิญทดสอบ');
+  const b = new (require(require('path').join(__dirname, '..', '..', 'server', 'node_modules', 'ws')))(base.replace(/^http/, 'ws'));
+  b.msgs = []; b.on('message', d => b.msgs.push(JSON.parse(d)));
+  await new Promise(r => b.on('open', r));
+  b.send(JSON.stringify({ type: 'join', token: T['แชทB'] }));
+  const wait = async (ws, type) => { for (let k = 0; k < 300; k++) { const j = ws.msgs.findIndex(m => m.type === type); if (j >= 0) return ws.msgs.splice(j, 1)[0]; await sleep(10); } throw new Error('timeout ' + type); };
+  assert.equal((await wait(b, 'joined')).channel, null, 'ไม่ได้เลือกกลุ่ม = ยังไม่อยู่กลุ่มไหน');
+  a.send(JSON.stringify({ type: 'invite', to: ib, channel: 'กลุ่มเชิญทดสอบ' }));
+  const inv = await wait(b, 'invite');
+  assert.equal(inv.channel, 'กลุ่มเชิญทดสอบ'); assert.equal(inv.locked, true);
+  assert.equal((await a.wait('invite_sent')).online, true);
+  const n = (await call('GET', '/api/notifications', T['แชทB'])).body;
+  assert.ok(JSON.stringify(n).includes('room:กลุ่มเชิญทดสอบ'), 'มีในการแจ้งเตือน');
+  b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: 'กลุ่มเชิญทดสอบ' }));
+  assert.equal((await wait(b, 'joined')).channel, 'กลุ่มเชิญทดสอบ', 'ได้รับเชิญแล้วเข้ากลุ่มมีรหัสได้เลย');
+  a.close(); b.close();
+  await call('DELETE', '/api/channels/' + room.body.id, T['แชทA']);
+});
+
 (async () => {
   let fail = 0;
   for (const [n, f] of tests) {
