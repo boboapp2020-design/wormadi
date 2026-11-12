@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">วอภายใน</string>
+    <string name="title_activity_main">วอภายใน</string>
+    <string name="package_name">th.co.walkie.app</string>
+    <string name="custom_url_scheme">th.co.walkie.app</string>
+</resources>

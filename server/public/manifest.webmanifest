@@ -1,0 +1,22 @@
+{
+  "name": "WORMADI – วอมาดิ คุยปุ๊บ งานเดินต่อ",
+  "short_name": "WORMADI",
+  "description": "วอสื่อสารภายใน กดค้างเพื่อพูด แชทในทีม",
+  "lang": "th",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "id": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#eaf1fb",
+  "theme_color": "#0b4fa8",
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "ประวัติการสนทนา", "url": "./log.html", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

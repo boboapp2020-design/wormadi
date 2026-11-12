@@ -1,0 +1,69 @@
+/* ธีมของ Factory Talk (ใช้ร่วมกันทุกหน้า) — ตามต้นแบบ 16 หน้า
+   ภาคสนาม (light): ฟ้า-ขาว หัวกรมท่า อ่านกลางแดด  ← ค่าเริ่มต้น
+   กลางคืน (dark):  กรมท่าเข้ม ถนอมสายตา
+   ปุ่มพูด: ส้ม = พร้อมพูด, แดง = กำลังพูด, เขียว = กำลังรับฟัง (ทั้งสองธีม)
+   ทุกคู่สีตัวอักษรผ่าน WCAG AA (ตรวจด้วย node tools/check-contrast.js) */
+:root, :root[data-theme="light"] {
+  --bg:#eef3fa; --bg-2:#e5edf8; --panel:#ffffff; --panel-2:#eef2f8; --field:#ffffff;
+  --line:#7a8aa3; --line-soft:#dbe3ee; --line-w:1.5px;
+  --text:#0d1b33; --muted:#4a5a73; --nav-muted:#5b6880;
+  --primary:#0b5bd3; --primary-2:#1f6fe0; --on-primary:#ffffff; --primary-fg:#0a4fb8; --primary-soft:#dce9ff;
+  --head-a:#0a2a62; --head-b:#123d86; --on-head:#ffffff; --head-muted:#c9d9f2; --online:#3fdc7a;
+  --signal:#1f9d45; --ok-dot:#16a34a;
+  --talk:#c4001d; --on-talk:#ffffff; --talk-fg:#a3001a;
+  --listen:#0d7a3a; --on-listen:#ffffff; --listen-fg:#0a6230;
+  --ok-fg:#0a6230; --warn-fg:#7a4100; --err-fg:#a3001a;
+  --badge:#e0182d; --on-badge:#ffffff;
+  --accent:#c44a00; --on-accent:#ffffff;
+  --mine-bg:#d4e6ff; --other-bg:#e9f1fc;
+  --toast-bg:#0d1b33; --toast-fg:#ffffff; --toast-line:#ffb000;
+  --ptt-page-a:#16438a; --ptt-page-b:#061533; --on-ptt-page:#ffffff; --ptt-page-muted:#c3d3ee; --ptt-card:#14366f;
+  --ptt-idle-a:#c84f00; --ptt-idle-b:#9c3800; --on-ptt:#ffffff; --ptt-glow:#ff9a3d; --ptt-ring:#ffd2a8;
+  --ptt-talk-a:#d0021b; --ptt-talk-b:#7d0012;
+  --ptt-listen-a:#0d7a3a; --ptt-listen-b:#064520;
+  --wave-a:#3d8bff; --wave-b:#9cc6ff;
+  --brand-fg:#0a2a62; --brand-talk:#c45200;
+  --t-wt-a:#1f6fe0; --t-wt-b:#0a47b8; --on-t-wt:#ffffff;
+  --t-grp-bg:#d9f2e3; --t-grp-fg:#0f6b36;
+  --t-msg-a:#0b7f80; --t-msg-b:#075e63; --on-t-msg:#ffffff;
+  --t-sos-a:#d81e1e; --t-sos-b:#a30f0f; --on-t-sos:#ffffff;
+  --t-task-bg:#e7e3fb; --t-task-fg:#4a2fb0;
+  --t-map-bg:#fde4cf; --t-map-fg:#a33a00;
+  --sky-a:#2f7fd8; --sky-b:#7fb7ec; --sky-c:#cfe6f9;
+  --bld-1:#e4ecf4; --bld-2:#b9c9da; --bld-3:#5d7a99; --bld-win:#2c5d9c; --steam:#ffffff;
+  --field-1:#7cc04a; --field-2:#459a2e; --field-3:#2a6d24; --field-deep:#123f17;
+  --shadow:0 6px 18px rgba(16,58,130,.12);
+  --focus:#c25e00;
+}
+:root[data-theme="dark"] {
+  --bg:#0b1426; --bg-2:#0a1220; --panel:#13213a; --panel-2:#1b2c4a; --field:#0e1a2f;
+  --line:#6a7fa3; --line-soft:#2a3d5e; --line-w:1px;
+  --text:#e8eef8; --muted:#a9b7cc; --nav-muted:#9fb0c8;
+  --primary:#3d8bff; --primary-2:#5aa0ff; --on-primary:#04122b; --primary-fg:#8dbcff; --primary-soft:#1c3560;
+  --head-a:#081a3a; --head-b:#0f2a57; --on-head:#ffffff; --head-muted:#a9c3ea; --online:#3fdc7a;
+  --signal:#45d36f; --ok-dot:#45d36f;
+  --talk:#c62828; --on-talk:#ffffff; --talk-fg:#ff8a80;
+  --listen:#1b7a43; --on-listen:#ffffff; --listen-fg:#5ee59a;
+  --ok-fg:#5ee59a; --warn-fg:#ffc966; --err-fg:#ff8a80;
+  --badge:#d32f2f; --on-badge:#ffffff;
+  --accent:#ff9a3d; --on-accent:#1a0b00;
+  --mine-bg:#1f4a8a; --other-bg:#1b2c4a;
+  --toast-bg:#2a1f10; --toast-fg:#ffd68a; --toast-line:#f5a623;
+  --ptt-page-a:#123570; --ptt-page-b:#040d22; --on-ptt-page:#ffffff; --ptt-page-muted:#a9c3ea; --ptt-card:#10295a;
+  --ptt-idle-a:#c84f00; --ptt-idle-b:#9c3800; --on-ptt:#ffffff; --ptt-glow:#b85a10; --ptt-ring:#5a2a08;
+  --ptt-talk-a:#d32f2f; --ptt-talk-b:#8e1b1b;
+  --ptt-listen-a:#1b7a43; --ptt-listen-b:#0e4a27;
+  --wave-a:#3d8bff; --wave-b:#9cc6ff;
+  --brand-fg:#ffffff; --brand-talk:#ffad5c;
+  --t-wt-a:#2463c6; --t-wt-b:#173f86; --on-t-wt:#ffffff;
+  --t-grp-bg:#173d2a; --t-grp-fg:#7be0a4;
+  --t-msg-a:#0b6f70; --t-msg-b:#074d52; --on-t-msg:#ffffff;
+  --t-sos-a:#c62828; --t-sos-b:#8e1b1b; --on-t-sos:#ffffff;
+  --t-task-bg:#2a2556; --t-task-fg:#c4b8ff;
+  --t-map-bg:#4a2a14; --t-map-fg:#ffbf8a;
+  --sky-a:#0b1d40; --sky-b:#143061; --sky-c:#1f4170;
+  --bld-1:#2b4064; --bld-2:#21334f; --bld-3:#16243a; --bld-win:#ffd36b; --steam:#9fb3cf;
+  --field-1:#2f6e2c; --field-2:#1f521f; --field-3:#143b16; --field-deep:#06200b;
+  --shadow:0 6px 18px rgba(0,0,0,.45);
+  --focus:#ffd166;
+}

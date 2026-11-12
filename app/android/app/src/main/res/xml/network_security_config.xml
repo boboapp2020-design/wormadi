@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  วงภายใน: อนุญาต ws:// (ไม่เข้ารหัส) ไปยังเซิร์ฟเวอร์ใน LAN เพราะเรากำหนดโดเมน/IP ล่วงหน้าไม่ได้
+  wss:// ที่ใช้ใบรับรองสร้างเอง ไม่ได้เปิดไว้ทั้งระบบ แต่ใช้ "pin" ลายนิ้วมือที่ผู้ใช้ยืนยันในแอป (ดู Net.java)
+  ห้ามเพิ่ม domain-config ที่นี่ เว้นแต่ปรับ Net.PinTrust ให้ใช้ checkServerTrusted แบบรู้ hostname
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

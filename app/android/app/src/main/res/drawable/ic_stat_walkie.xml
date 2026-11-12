@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Notification status-bar icon: simple walkie-talkie (white, 24dp) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M9,1h2v4h-2z M7,5h10a2,2 0,0 1,2 2v14a2,2 0,0 1,-2 2H7a2,2 0,0 1,-2 -2V7a2,2 0,0 1,2 -2z M8,8v4h8V8z M9,15a1,1 0,1 0,0.01 0z M12,15a1,1 0,1 0,0.01 0z M15,15a1,1 0,1 0,0.01 0z M9,18a1,1 0,1 0,0.01 0z M12,18a1,1 0,1 0,0.01 0z M15,18a1,1 0,1 0,0.01 0z" />
+</vector>

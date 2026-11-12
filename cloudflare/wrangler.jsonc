@@ -1,0 +1,41 @@
+{
+  // วอภายใน บน Cloudflare
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "walkie",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,      // ลิงก์เดิม https://walkie.<บัญชี>.workers.dev (พาไป wormadi.pages.dev)
+  "preview_urls": false,   // ไม่เปิดลิงก์ทดลองแยกตามเวอร์ชัน
+
+  // หน้าเว็บ (PWA) ใช้ไฟล์เดียวกับเซิร์ฟเวอร์ LAN: ../server/public
+  // Worker รับทุก request ก่อน (WebSocket อยู่ที่ "/" เหมือนเดิม) แล้วค่อยส่งต่อไฟล์เว็บ
+  "assets": { "directory": "../server/public", "binding": "ASSETS", "run_worker_first": true },
+
+  // ห้องวอ: Durable Object ตัวเดียวถือทุกช่อง (สิทธิ์พูดทีละคน + ส่งต่อเสียง)
+  "durable_objects": { "bindings": [{ "name": "ROOM", "class_name": "WalkieRoom" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WalkieRoom"] }],
+
+  // log การพูด/เข้า-ออกช่อง  (database_id จะถูกเขียนให้อัตโนมัติโดย npm run deploy)
+  "d1_databases": [
+    { "binding": "DB", "database_name": "walkie-log", "database_id": "2ceecce6-e277-4096-84cc-4999348db2aa", "migrations_dir": "migrations" }
+  ],
+
+  // เสียงที่บันทึกแต่ละครั้งที่พูด (ฟังย้อนหลัง) — ต้องเปิด R2 ในบัญชี Cloudflare ก่อน
+  "r2_buckets": [{ "binding": "REC", "bucket_name": "walkie-recordings" }],
+
+  // ลบ log เก่าทุกวัน ตี 3 เวลาไทย (20:00 UTC)
+  "triggers": { "crons": ["0 20 * * *"] },
+
+  "vars": {
+    "APP_NAME": "WORMADI",
+    // ลิงก์หลักของแอป (ลิงก์ *.workers.dev เดิมจะพาไปที่นี่)
+    "PUBLIC_URL": "https://wormadi.pages.dev",   // ลิงก์หลัก (หน้าเว็บจาก workers.dev พาไปที่นี่ · API ยังใช้ได้เป็นทางสำรอง)
+    "ORG_NAME": "Mitr Lao Sugar Co., Ltd.",
+    // ชื่อช่อง คั่นด้วย |  (ไอคอนเลือกอัตโนมัติจากคำในชื่อ: โรงงาน/น้ำตาล/ไฟฟ้า/คลัง/ซ่อม/รปภ./ขนส่ง/สำนักงาน)
+    "CHANNELS": "โรงงาน (ทั้งหมด)|ผลิตน้ำตาล|โรงไฟฟ้า|คลังสินค้า|ซ่อมบำรุง|รปภ.",
+    "MAX_TALK_MS": "60000",
+    "LOG_RETENTION_DAYS": "3",
+    "RECORDING_RETENTION_DAYS": "3"
+  }
+  // บัญชีพนักงานอยู่ในตาราง users (สร้างคนแรกด้วย: node scripts/create-user.js --emp admin --name "ผู้ดูแลระบบ" --role admin)
+}

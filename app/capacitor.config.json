@@ -1,0 +1,15 @@
+{
+  "appId": "th.co.walkie.app",
+  "appName": "วอภายใน",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": false,
+    "webContentsDebuggingEnabled": true
+  },
+  "plugins": {
+    "SystemBars": {
+      "insetsHandling": "css"
+    }
+  }
+}

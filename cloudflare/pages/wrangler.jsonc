@@ -1,0 +1,9 @@
+{
+  // ลิงก์หลักของแอป: https://wormadi.pages.dev  (ไม่มีชื่อบัญชี Cloudflare ในลิงก์)
+  // หน้าเว็บ/API ส่งต่อไป Worker "walkie" · เสียง (WebSocket) ต่อตรงเข้าห้องวอ (Durable Object ของ walkie)
+  "name": "wormadi",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-10-01",
+  "services": [{ "binding": "APP", "service": "walkie" }],
+  "durable_objects": { "bindings": [{ "name": "ROOM", "class_name": "WalkieRoom", "script_name": "walkie" }] }
+}

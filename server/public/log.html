@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="th" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b4fa8">
+<title>ประวัติการสนทนา</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<script>
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem('walkie_theme'); } catch (e) {}
+    if (t !== 'dark' && t !== 'light') t = 'light';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theme.css">
+<style>
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--text); font-family:"Prompt","Noto Sans Thai","Leelawadee UI",system-ui,sans-serif; font-size:var(--font-size); }
+  button, input, select { font:inherit; color:inherit; }
+  :focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+  svg.i { width:24px; height:24px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  header { background:linear-gradient(180deg, var(--head-a), var(--head-b)); color:var(--on-head); display:flex; align-items:center; gap:6px; padding:calc(6px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))) 8px 8px; position:sticky; top:0; z-index:2; }
+  header h1 { font-size:20px; margin:0; flex:1; }
+  .icon-btn { width:44px; height:44px; display:inline-flex; align-items:center; justify-content:center; border:0; border-radius:12px; background:transparent; color:inherit; cursor:pointer; text-decoration:none; }
+  main { max-width:880px; margin:0 auto; padding:12px 12px 32px; }
+  .card { background:var(--panel); border:1px solid var(--line-soft); border-radius:16px; padding:14px; box-shadow:var(--shadow); margin-bottom:12px; }
+  .filters { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; align-items:end; }
+  label.f { display:block; font-size:13px; font-weight:600; color:var(--muted); margin-bottom:4px; }
+  select, input.f { width:100%; min-height:44px; padding:8px 12px; border-radius:12px; border:var(--line-w) solid var(--line); background:var(--field); color:var(--text); }
+  .checks { display:flex; gap:14px; flex-wrap:wrap; font-size:15px; }
+  .checks input { width:20px; height:20px; accent-color:var(--primary); vertical-align:-4px; }
+  .btn { min-height:44px; padding:8px 16px; border-radius:999px; font-weight:700; border:var(--line-w) solid var(--line); background:var(--panel); color:var(--primary-fg); cursor:pointer; display:inline-flex; gap:8px; align-items:center; justify-content:center; }
+  .btn.primary { background:var(--primary); border-color:var(--primary); color:var(--on-primary); }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px; }
+  .stat { background:var(--panel-2); border-radius:12px; padding:12px; }
+  .stat small { display:block; color:var(--muted); font-size:13px; }
+  .stat b { font-size:24px; }
+  .top { margin:10px 0 0; padding:0; list-style:none; display:flex; flex-wrap:wrap; gap:8px; }
+  .top li { background:var(--panel-2); border-radius:999px; padding:4px 12px; font-size:14px; }
+  table { width:100%; border-collapse:collapse; font-size:15px; }
+  th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { font-size:13px; color:var(--muted); font-weight:700; }
+  td.num { text-align:right; white-space:nowrap; }
+  .ev { font-size:12px; font-weight:700; padding:2px 8px; border-radius:999px; white-space:nowrap; }
+  .ev.talk { background:var(--primary-soft); color:var(--primary-fg); }
+  .ev.join { background:var(--panel-2); color:var(--ok-fg); }
+  .ev.leave { background:var(--panel-2); color:var(--muted); }
+  .muted { color:var(--muted); }
+  .err { color:var(--err-fg); }
+  .empty { text-align:center; padding:28px; color:var(--muted); }
+  @media (max-width:560px) { .hide-sm { display:none; } th, td { padding:8px 4px; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></symbol>
+</svg>
+<header>
+  <a class="icon-btn" href="./" aria-label="กลับไปหน้าแอป"><svg class="i"><use href="#i-back"/></svg></a>
+  <h1>ประวัติการสนทนา</h1>
+  <button class="icon-btn" id="reload" type="button" aria-label="โหลดใหม่"><svg class="i"><use href="#i-refresh"/></svg></button>
+</header>
+<main>
+  <div class="card">
+    <div class="filters">
+      <div><label class="f" for="channel">ช่อง</label><select id="channel"><option value="">ทุกช่อง</option></select></div>
+      <div><label class="f" for="range">ช่วงเวลา</label>
+        <select id="range"><option value="today">วันนี้</option><option value="1">24 ชั่วโมง</option><option value="7" selected>7 วัน</option><option value="30">30 วัน</option><option value="90">90 วัน</option></select></div>
+      <div><label class="f" for="who">ค้นชื่อ</label><input class="f" id="who" placeholder="เช่น สมชาย" autocomplete="off"></div>
+      <div><button class="btn" id="csv" type="button" style="width:100%"><svg class="i"><use href="#i-download"/></svg>ส่งออก CSV</button></div>
+    </div>
+    <div class="checks" style="margin-top:12px" role="group" aria-label="ชนิดเหตุการณ์">
+      <label><input type="checkbox" value="talk" checked> การพูด</label>
+      <label><input type="checkbox" value="join" checked> เข้าช่อง</label>
+      <label><input type="checkbox" value="leave"> ออกช่อง</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stats">
+      <div class="stat"><small>จำนวนครั้งที่พูด</small><b id="sTalks">–</b></div>
+      <div class="stat"><small>เวลาพูดรวม</small><b id="sTime">–</b></div>
+      <div class="stat"><small>คนที่พูด</small><b id="sPeople">–</b></div>
+      <div class="stat"><small>หมดเวลา 60 วิ</small><b id="sTimeout">–</b></div>
+    </div>
+    <ul class="top" id="topList" aria-label="พูดมากที่สุด"></ul>
+  </div>
+
+  <div class="card" style="padding:4px 10px">
+    <table>
+      <thead><tr><th>เวลา</th><th>เหตุการณ์</th><th>ชื่อ</th><th class="hide-sm">ช่อง</th><th style="text-align:right">วินาที</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="empty">กำลังโหลด…</td></tr></tbody>
+    </table>
+    <p class="muted" id="foot" style="font-size:13px;margin:8px 4px"></p>
+  </div>
+</main>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const lsJson = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+let token = localStorage.getItem('walkie_token') || '';
+let rows = [];
+const LIMIT = 2000;
+const EV = { talk: 'พูด', join: 'เข้าช่อง', leave: 'ออกช่อง' };
+const REASON = { timeout: ' (หมดเวลา)', left: ' (หลุด)' };
+const fmt = new Intl.DateTimeFormat('th-TH', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+function range() {
+  const v = $('range').value, now = Date.now();
+  if (v === 'today') { const d = new Date(); d.setHours(0, 0, 0, 0); return [d.getTime(), now]; }
+  return [now - Number(v) * 86400000, now];
+}
+function query(extra = '') {
+  const [from, to] = range();
+  const ev = [...document.querySelectorAll('.checks input:checked')].map(i => i.value).join(',') || 'talk';
+  const ch = $('channel').value;
+  return `api/log?from=${from}&to=${to}&events=${ev}&limit=${LIMIT}${ch ? '&channel=' + encodeURIComponent(ch) : ''}${extra}`;
+}
+const headers = () => (token ? { Authorization: 'Bearer ' + token } : {});
+
+async function load() {
+  $('rows').innerHTML = '<tr><td colspan="5" class="empty">กำลังโหลด…</td></tr>';
+  let r;
+  try { r = await fetch(query(), { headers: headers(), cache: 'no-store' }); }
+  catch { $('rows').innerHTML = '<tr><td colspan="5" class="empty">เชื่อมต่อไม่ได้</td></tr>'; return; }
+  if (r.status === 401 || r.status === 403) { $('rows').innerHTML = `<tr><td colspan="5" class="empty">${r.status === 401 ? 'กรุณาเข้าสู่ระบบในแอปก่อน' : 'หน้านี้สำหรับหัวหน้างานและผู้ดูแลระบบ'}</td></tr>`; return; }
+  if (r.status === 404) { $('rows').innerHTML = '<tr><td colspan="5" class="empty">เซิร์ฟเวอร์นี้ไม่มีระบบเก็บประวัติ (ใช้ได้เมื่อรันบน Cloudflare)</td></tr>'; return; }
+  rows = await r.json();
+  render();
+}
+function render() {
+  const q = $('who').value.trim().toLowerCase();
+  const list = q ? rows.filter(x => x.name.toLowerCase().includes(q)) : rows;
+  const talks = list.filter(x => x.event === 'talk');
+  const total = talks.reduce((s, x) => s + (x.ms || 0), 0);
+  const per = {};
+  for (const t of talks) per[t.name] = (per[t.name] || 0) + (t.ms || 0);
+  $('sTalks').textContent = talks.length.toLocaleString('th-TH');
+  $('sTime').textContent = total >= 60000 ? `${Math.floor(total / 60000)} นาที ${Math.round((total % 60000) / 1000)} วิ` : `${Math.round(total / 1000)} วิ`;
+  $('sPeople').textContent = Object.keys(per).length;
+  $('sTimeout').textContent = talks.filter(t => t.reason === 'timeout').length;
+  $('topList').innerHTML = Object.entries(per).sort((a, b) => b[1] - a[1]).slice(0, 5)
+    .map(([n, ms]) => `<li>${esc(n)} · ${Math.round(ms / 1000)} วิ</li>`).join('');
+  $('rows').innerHTML = list.length ? list.map(x => `<tr>
+      <td>${fmt.format(x.ts)}</td>
+      <td><span class="ev ${x.event}">${EV[x.event] || x.event}</span>${x.reason && REASON[x.reason] ? `<span class="muted" style="font-size:13px">${REASON[x.reason]}</span>` : ''}</td>
+      <td>${esc(x.name)}</td>
+      <td class="hide-sm">${esc(x.channel)}</td>
+      <td class="num">${x.ms != null ? (x.ms / 1000).toFixed(1) : ''}</td></tr>`).join('')
+    : '<tr><td colspan="5" class="empty">ไม่มีรายการในช่วงนี้</td></tr>';
+  $('foot').textContent = rows.length >= LIMIT ? `แสดง ${LIMIT} รายการล่าสุด เลือกช่วงเวลาให้แคบลงหรือส่งออก CSV เพื่อดูทั้งหมด` : `${list.length} รายการ · เวลาตามเครื่องนี้`;
+}
+async function exportCsv() {
+  const r = await fetch(query('&format=csv').replace(`limit=${LIMIT}`, 'limit=5000'), { headers: headers(), cache: 'no-store' });
+  if (!r.ok) return alert('ส่งออกไม่ได้ (HTTP ' + r.status + ')');
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement('a');
+  a.href = url; a.download = `walkie-log-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+$('reload').onclick = load;
+$('csv').onclick = exportCsv;
+$('who').addEventListener('input', render);
+for (const el of [$('channel'), $('range'), ...document.querySelectorAll('.checks input')]) el.addEventListener('change', load);
+
+fetch('api/channels', { cache: 'no-store' }).then(r => r.json()).then(list => {
+  $('channel').insertAdjacentHTML('beforeend', list.map(c => `<option>${esc(c.name)}</option>`).join(''));
+}).catch(() => {});
+load();
+</script>
+</body>
+</html>

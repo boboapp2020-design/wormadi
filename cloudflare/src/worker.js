@@ -1,0 +1,555 @@
+// Factory Talk บน Cloudflare Workers
+//   หน้าเว็บ (PWA) จาก ../server/public, WebSocket ห้องวอที่ "/", REST API ที่ /api/*
+//   ทุก API (ยกเว้น config/channels/login) ต้องส่ง  Authorization: Bearer <token>  จาก /api/login
+//   สิทธิ์: user (พนักงาน) < lead (หัวหน้า: มอบงาน, ปิดเหตุ SOS, ดูรายงาน/log) < admin (ผู้ดูแลระบบ)
+import { WalkieRoom, reactionsFor, EMOJIS } from './room.js';
+import { toWav } from './codec.js';
+import { hashPassword, verifyPassword, createSession, userFromToken, bearer, sha256, roleAtLeast, ROLES, PUBLIC_USER } from './auth.js';
+
+export { WalkieRoom };
+
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
+};
+const API = { 'Cache-Control': 'no-store', ...CORS };
+const json = (data, status = 200) => Response.json(data, { status, headers: API });
+const fail = (status, error) => json({ error }, status);
+class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
+
+const SOS_KINDS = { general: 'เหตุฉุกเฉิน', fire: 'เพลิงไหม้', injury: 'อุบัติเหตุ / เจ็บป่วย', chemical: 'สารเคมีรั่วไหล', other: 'ความเสี่ยงอื่นๆ' };
+const ICONS = ['star', 'gear', 'bolt', 'box', 'tools', 'flask', 'shield', 'factory', 'truck', 'building', 'radio', 'users', 'pin', 'drop', 'fire'];
+const COLORS = ['gold', 'green', 'yellow', 'purple', 'orange', 'blue', 'red', 'teal', 'gray'];
+
+export default {
+  async fetch(req, env) {
+    const url = new URL(req.url);
+    if ((req.headers.get('Upgrade') || '').toLowerCase() === 'websocket') return room(env).fetch(req);
+    // old link (*.workers.dev) -> main link without the account name; API keeps working for older Android installs
+    if (env.PUBLIC_URL && url.hostname.endsWith('.workers.dev') && req.method === 'GET' && !url.pathname.startsWith('/api/'))
+      return Response.redirect(env.PUBLIC_URL + url.pathname + url.search, 301);
+    if (url.pathname.startsWith('/api/')) {
+      if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
+      try { return await api(req, env, url); }
+      catch (e) {
+        if (e instanceof HttpError) return fail(e.status, e.message);
+        console.error(e);
+        return fail(500, 'เกิดข้อผิดพลาดในระบบ');
+      }
+    }
+    const res = await env.ASSETS.fetch(req);
+    const type = res.headers.get('Content-Type') || '';
+    if (res.ok && (url.pathname === '/sw.js' || /text\/(html|css)|javascript/.test(type))) {
+      const h = new Headers(res.headers);
+      h.set('Cache-Control', 'no-cache');   // updates reach phones on next open
+      return new Response(res.body, { status: res.status, headers: h });
+    }
+    return res;
+  },
+
+  // ลบข้อมูลเก่าทุกวัน (cron ใน wrangler.jsonc)
+  async scheduled(_evt, env) {
+    const day = 86_400_000, now = Date.now();
+    const cutoff = now - (Number(env.LOG_RETENTION_DAYS) || 90) * day;
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM walkie_log WHERE ts < ?').bind(cutoff),
+      env.DB.prepare('DELETE FROM reactions WHERE msg_id IN (SELECT id FROM messages WHERE ts < ?)').bind(cutoff),
+      env.DB.prepare('DELETE FROM messages WHERE ts < ?').bind(cutoff),
+      env.DB.prepare('DELETE FROM notifications WHERE ts < ?').bind(cutoff),
+      env.DB.prepare('DELETE FROM sessions WHERE expires_at < ?').bind(now),
+    ]);
+    // recordings stored in D1 (no R2)
+    const recCut = now - (Number(env.RECORDING_RETENTION_DAYS) || 7) * day;
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM audio_clips WHERE ts < ?').bind(recCut),
+      env.DB.prepare(`UPDATE messages SET audio = NULL WHERE audio = 'db' AND ts < ?`).bind(recCut),
+    ]);
+    if (env.REC) {   // recordings: rec/YYYY-MM-DD/<id>.wav
+      const keepFrom = new Date(now - (Number(env.RECORDING_RETENTION_DAYS) || 30) * day).toISOString().slice(0, 10);
+      let cursor;
+      do {
+        const page = await env.REC.list({ prefix: 'rec/', cursor });
+        const old = page.objects.filter(o => o.key.slice(4, 14) < keepFrom).map(o => o.key);
+        if (old.length) await env.REC.delete(old);
+        await env.DB.prepare(`UPDATE messages SET audio = NULL WHERE audio LIKE 'rec/%' AND substr(audio, 5, 10) < ?`).bind(keepFrom).run();
+        cursor = page.truncated ? page.cursor : undefined;
+      } while (cursor);
+    }
+  },
+};
+
+const room = env => env.ROOM.get(env.ROOM.idFromName('main'));
+async function roomCall(env, path, body) {
+  const r = await room(env).fetch('https://room' + path, body ? { method: 'POST', body: JSON.stringify(body) } : undefined);
+  return path === '/reload' ? null : r.json();
+}
+async function readJson(req) { try { return await req.json(); } catch { throw new HttpError(400, 'ข้อมูลไม่ถูกต้อง'); } }
+async function need(req, env, minRole = 'user') {
+  const user = await userFromToken(env.DB, bearer(req));
+  if (!user) throw new HttpError(401, 'กรุณาเข้าสู่ระบบ');
+  if (!roleAtLeast(user.role, minRole)) throw new HttpError(403, 'ไม่มีสิทธิ์ใช้งานส่วนนี้');
+  return user;
+}
+const str = (v, max) => String(v ?? '').trim().slice(0, max);
+
+// ---- rooms with an optional password
+/** names of locked rooms this user has not unlocked (admins and the creator always have access) */
+async function deniedRooms(db, me) {
+  if (roleAtLeast(me.role, 'admin')) return new Set();
+  const { results } = await db.prepare(
+    `SELECT c.name FROM channels c WHERE c.pass IS NOT NULL AND c.active = 1 AND (c.created_by IS NULL OR c.created_by != ?)
+       AND NOT EXISTS (SELECT 1 FROM channel_access a WHERE a.channel_id = c.id AND a.user_id = ?)`).bind(me.id, me.id).all();
+  return new Set(results.map(r => r.name));
+}
+/** private call channel "dm:a:b": only users a and b */
+const dmBlocked = (ch, me) => { const m = /^dm:(\d+):(\d+)$/.exec(String(ch || '')); return !!m && ![Number(m[1]), Number(m[2])].includes(me.id); };
+async function deleteChannel(db, cid) {
+  await db.batch([
+    db.prepare('DELETE FROM channel_access WHERE channel_id = ?').bind(cid),
+    db.prepare('UPDATE users SET main_channel = NULL WHERE main_channel = ?').bind(cid),
+    db.prepare('UPDATE map_pins SET channel_id = NULL WHERE channel_id = ?').bind(cid),
+    db.prepare('DELETE FROM channels WHERE id = ?').bind(cid),
+  ]);
+}
+async function notify(env, { userId = null, kind, title, body = '', ref = null }) {
+  const r = await env.DB.prepare('INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(Date.now(), userId, kind, title, body, ref).run();
+  const n = { id: r.meta.last_row_id, ts: Date.now(), kind, title, body, ref };
+  await roomCall(env, '/broadcast', { msg: { type: 'notification', notification: n }, userIds: userId ? [userId] : null });
+  return n;
+}
+function dataUrl(s, maxBytes) {
+  const m = /^data:(image\/(?:png|jpeg|webp|svg\+xml));base64,([A-Za-z0-9+/=]+)$/.exec(String(s || ''));
+  if (!m) throw new HttpError(400, 'ไฟล์รูปไม่ถูกต้อง (รองรับ PNG / JPEG / WebP)');
+  if (m[2].length * 0.75 > maxBytes) throw new HttpError(413, 'ไฟล์รูปใหญ่เกินไป');
+  return s;
+}
+function imageResponse(s) {
+  const m = /^data:([^;]+);base64,(.*)$/.exec(s || '');
+  if (!m) return fail(404, 'ไม่มีรูป');
+  const bytes = Uint8Array.from(atob(m[2]), c => c.charCodeAt(0));
+  return new Response(bytes, { headers: { 'Content-Type': m[1], 'Cache-Control': 'private, max-age=60', ...CORS } });
+}
+
+// ======================================================================= API
+async function api(req, env, url) {
+  const p = url.pathname, m = req.method, db = env.DB;
+  const seg = p.split('/').filter(Boolean);           // ['api', 'tasks', '12', 'ack']
+  const id = Number(seg[2]);
+
+  // ---------------------------------------------------------------- public
+  if (p === '/api/config') {
+    return json({
+      server: 'cloudflare', accounts: true, recording: !!(env.REC || env.DB), emojis: EMOJIS, sosKinds: SOS_KINDS,
+      features: ['chat', 'react', 'roster', 'history', 'log', 'accounts', 'tasks', 'sos', 'map', 'report'],
+      org: env.ORG_NAME || '', app: env.APP_NAME || 'WORMADI',
+    });
+  }
+  if (p === '/api/channels' && m === 'GET') {
+    const [{ results }, live, viewer] = await Promise.all([
+      db.prepare(`SELECT c.id, c.name, c.sub, c.icon, c.color, (c.pass IS NOT NULL) AS locked, c.created_by, c.created_at, u.name AS creator_name
+                   FROM channels c LEFT JOIN users u ON u.id = c.created_by WHERE c.active = 1 ORDER BY c.sort, c.id`).all(),
+      roomCall(env, '/channels'),
+      userFromToken(db, bearer(req)),
+    ]);
+    const count = Object.fromEntries(live.map(c => [c.name, c.users]));
+    const denied = viewer ? await deniedRooms(db, viewer) : null;
+    return json(results.map(c => ({ ...c, users: count[c.name] || 0,
+      access: c.locked ? (denied ? !denied.has(c.name) : false) : true,
+      can_delete: !!viewer && (roleAtLeast(viewer.role, 'admin') || c.created_by === viewer.id) })));
+  }
+  if (p === '/api/login' && m === 'POST') {
+    const b = await readJson(req);
+    const emp = str(b.emp, 32), pass = String(b.password || '');
+    if (!emp || !pass) return fail(400, 'กรุณาใส่รหัสพนักงานและรหัสผ่าน');
+    const key = 'fail:' + emp.toLowerCase();
+    const lock = JSON.parse((await db.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first('value')) || '{"n":0,"until":0}');
+    if (lock.until > Date.now()) return fail(429, `ใส่รหัสผิดหลายครั้ง ลองใหม่ใน ${Math.ceil((lock.until - Date.now()) / 60000)} นาที`);
+    const u = await db.prepare('SELECT id, pass, active FROM users WHERE emp = ?').bind(emp).first();
+    const ok = u && u.active && await verifyPassword(pass, u.pass);
+    if (!ok) {
+      const n = lock.n + 1;
+      await db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').bind(key, JSON.stringify({ n: n >= 5 ? 0 : n, until: n >= 5 ? Date.now() + 10 * 60000 : 0 })).run();
+      return fail(401, u && !u.active ? 'บัญชีนี้ถูกปิดใช้งาน ติดต่อผู้ดูแลระบบ' : 'รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง');
+    }
+    // one account = one device: signing in here signs out every other device of this account
+    await db.batch([
+      db.prepare('DELETE FROM settings WHERE key = ?').bind(key),
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(u.id),
+    ]);
+    await roomCall(env, '/kick', { userId: u.id });
+    const s = await createSession(db, u.id, !!b.remember);
+    const user = await db.prepare(`SELECT ${PUBLIC_USER} FROM users u WHERE u.id = ?`).bind(u.id).first();
+    return json({ token: s.token, expires: s.expires, user });
+  }
+
+  // ---------------------------------------------------------------- signed in
+  const me = await need(req, env);
+  // default/reset password: nothing else works until the user sets their own
+  if (me.must_change && !['/api/me', '/api/me/password', '/api/logout'].includes(p)) return fail(403, 'กรุณาตั้งรหัสผ่านใหม่ก่อนใช้งาน');
+
+  if (p === '/api/logout' && m === 'POST') {
+    await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha256(bearer(req))).run();
+    return json({ ok: true });
+  }
+  if (p === '/api/me' && m === 'GET') {
+    const lr = (await db.prepare('SELECT last_read FROM notif_reads WHERE user_id = ?').bind(me.id).first('last_read')) || 0;
+    const unread = await db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE (user_id IS NULL OR user_id = ?) AND ts > ?').bind(me.id, lr).first('n');
+    const tasks = await db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE assignee_id = ? AND done_at IS NULL').bind(me.id).first('n');
+    const ch = me.main_channel ? await db.prepare('SELECT name FROM channels WHERE id = ?').bind(me.main_channel).first('name') : null;
+    return json({ user: { ...me, main_channel_name: ch }, unread, openTasks: tasks });
+  }
+  if (p === '/api/me' && m === 'PATCH') {
+    const b = await readJson(req);
+    if ('avatar' in b) await db.prepare('UPDATE users SET avatar = ? WHERE id = ?').bind(b.avatar ? dataUrl(b.avatar, 200_000) : null, me.id).run();
+    return json({ ok: true });
+  }
+  if (p === '/api/me/password' && m === 'POST') {
+    const b = await readJson(req);
+    const row = await db.prepare('SELECT pass FROM users WHERE id = ?').bind(me.id).first();
+    if (!(await verifyPassword(String(b.old || ''), row.pass))) return fail(400, 'รหัสผ่านเดิมไม่ถูกต้อง');
+    if (String(b.new || '').length < 6) return fail(400, 'รหัสผ่านใหม่ต้องยาวอย่างน้อย 6 ตัว');
+    if (String(b.new) === String(b.old)) return fail(400, 'รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสเดิม');
+    await db.prepare('UPDATE users SET pass = ?, must_change = 0 WHERE id = ?').bind(await hashPassword(String(b.new)), me.id).run();
+    return json({ ok: true });
+  }
+  if (seg[1] === 'avatar' && m === 'GET') {
+    return imageResponse(await db.prepare('SELECT avatar FROM users WHERE id = ?').bind(id).first('avatar'));
+  }
+  if (p === '/api/users' && m === 'GET') {
+    const [{ results }, online] = await Promise.all([
+      db.prepare(`SELECT ${PUBLIC_USER}, c.name AS main_channel_name FROM users u LEFT JOIN channels c ON c.id = u.main_channel WHERE u.active = 1 ORDER BY u.name`).all(),
+      roomCall(env, '/online'),
+    ]);
+    const on = new Map(online.map(o => [o.id, o.channel]));
+    return json(results.map(u => { const c = on.get(u.id) || null; return { ...u, online: on.has(u.id), channel: c && c.startsWith('dm:') ? 'คุยส่วนตัว' : c }; }));
+  }
+
+  // ---------------------------------------------------------------- rooms anyone can create
+  if (p === '/api/channels' && m === 'POST') {
+    const b = await readJson(req);
+    const name = str(b.name, 40), pass = String(b.password || '');
+    if (!name) return fail(400, 'กรุณาตั้งชื่อห้อง');
+    if (pass && (pass.length < 4 || pass.length > 32)) return fail(400, 'รหัสห้องต้องยาว 4–32 ตัว');
+    if (!roleAtLeast(me.role, 'admin')) {
+      const mine = await db.prepare('SELECT COUNT(*) AS n FROM channels WHERE created_by = ? AND active = 1').bind(me.id).first('n');
+      if (mine >= 10) return fail(400, 'สร้างห้องได้สูงสุด 10 ห้องต่อคน ลบห้องที่ไม่ใช้ก่อน');
+    }
+    const icon = ICONS.includes(b.icon) ? b.icon : 'radio', color = COLORS.includes(b.color) ? b.color : 'blue';
+    let r;
+    try {
+      r = await db.prepare('INSERT INTO channels (name, sub, icon, color, sort, pass, created_by, created_at) VALUES (?, ?, ?, ?, 100, ?, ?, ?)')
+        .bind(name, str(b.sub, 60), icon, color, pass ? await hashPassword(pass) : null, me.id, Date.now()).run();
+    } catch { return fail(409, 'มีห้องชื่อนี้แล้ว ลองตั้งชื่ออื่น'); }
+    await roomCall(env, '/reload');
+    return json({ ok: true, id: r.meta.last_row_id, name, locked: !!pass });
+  }
+  if (seg[1] === 'channels' && id && seg[3] === 'unlock' && m === 'POST') {
+    const c = await db.prepare('SELECT id, name, pass FROM channels WHERE id = ? AND active = 1').bind(id).first();
+    if (!c) return fail(404, 'ไม่พบห้องนี้');
+    if (!c.pass) return json({ ok: true, name: c.name });
+    const key = `roomfail:${me.id}:${id}`;
+    const lock = JSON.parse((await db.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first('value')) || '{"n":0,"until":0}');
+    if (lock.until > Date.now()) return fail(429, `ใส่รหัสห้องผิดหลายครั้ง ลองใหม่ใน ${Math.ceil((lock.until - Date.now()) / 60000)} นาที`);
+    if (!(await verifyPassword(String((await readJson(req)).password || ''), c.pass))) {
+      const n = lock.n + 1;
+      await db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').bind(key, JSON.stringify({ n: n >= 5 ? 0 : n, until: n >= 5 ? Date.now() + 10 * 60000 : 0 })).run();
+      return fail(403, 'รหัสห้องไม่ถูกต้อง');
+    }
+    await db.batch([
+      db.prepare('DELETE FROM settings WHERE key = ?').bind(key),
+      db.prepare('INSERT OR IGNORE INTO channel_access (channel_id, user_id, ts) VALUES (?, ?, ?)').bind(id, me.id, Date.now()),
+    ]);
+    return json({ ok: true, name: c.name });
+  }
+  if (seg[1] === 'channels' && id && !seg[3] && m === 'DELETE') {
+    const c = await db.prepare('SELECT id, created_by FROM channels WHERE id = ?').bind(id).first();
+    if (!c) return fail(404, 'ไม่พบห้องนี้');
+    if (!roleAtLeast(me.role, 'admin') && c.created_by !== me.id) return fail(403, 'ลบได้เฉพาะห้องที่คุณสร้าง');
+    await deleteChannel(db, id);
+    await roomCall(env, '/reload');
+    return json({ ok: true });
+  }
+
+  // ---------------------------------------------------------------- messages / history / audio
+  if (p === '/api/messages' && m === 'GET') {
+    const channel = url.searchParams.get('channel');
+    if (!channel) return fail(400, 'ต้องระบุ channel');
+    if ((await deniedRooms(db, me)).has(channel)) return fail(403, 'ห้องนี้มีรหัส ใส่รหัสห้องก่อน');
+    if (dmBlocked(channel, me)) return fail(403, 'เป็นการคุยส่วนตัวของผู้อื่น');
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
+    const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
+    const { results } = await db.prepare(
+      `SELECT id, ts, channel, kind, name, dept, uid, user_id, text, ms, (audio IS NOT NULL) AS audio
+       FROM messages WHERE channel = ? AND id < ? ORDER BY id DESC LIMIT ?`).bind(channel, before, limit).all();
+    results.reverse();
+    return json({ msgs: results, reactions: await reactionsFor(db, results.map(r => r.id)), more: results.length === limit });
+  }
+  if (p === '/api/conversations' && m === 'GET') {
+    const { results } = await db.prepare(
+      `SELECT m.channel, m.kind, m.name, m.text, m.ms, m.ts, m.id FROM messages m
+       JOIN (SELECT channel, MAX(id) AS id FROM messages GROUP BY channel) x ON x.id = m.id`).all();
+    const denied = await deniedRooms(db, me);
+    return json(results.filter(r => !denied.has(r.channel) && !dmBlocked(r.channel, me)));
+  }
+  if (p === '/api/history' && m === 'GET') {
+    const kind = url.searchParams.get('kind');
+    const days = Math.min(Number(url.searchParams.get('days')) || 7, 90);
+    const q = (url.searchParams.get('q') || '').trim();
+    let sql = `SELECT id, ts, channel, kind, name, dept, user_id, text, ms, (audio IS NOT NULL) AS audio FROM messages WHERE ts > ?`;
+    const args = [Date.now() - days * 86_400_000];
+    if (kind === 'talk' || kind === 'text') { sql += ' AND kind = ?'; args.push(kind); }
+    if (q) { sql += ' AND (name LIKE ? OR channel LIKE ? OR text LIKE ?)'; args.push(`%${q}%`, `%${q}%`, `%${q}%`); }
+    sql += ' ORDER BY id DESC LIMIT 300';
+    const denied = await deniedRooms(db, me);
+    return json((await db.prepare(sql).bind(...args).all()).results.filter(r => !denied.has(r.channel) && !dmBlocked(r.channel, me)));
+  }
+  if (seg[1] === 'audio' && m === 'GET') {
+    const row = await db.prepare('SELECT audio, channel FROM messages WHERE id = ?').bind(id).first();
+    if (row && ((await deniedRooms(db, me)).has(row.channel) || dmBlocked(row.channel, me))) return fail(403, 'ไม่มีสิทธิ์ฟังเสียงนี้');
+    const key = row && row.audio;
+    if (key === 'db') {
+      const clip = await db.prepare('SELECT rate, data FROM audio_clips WHERE msg_id = ?').bind(id).first();
+      if (!clip) return fail(404, 'ไม่พบไฟล์เสียง (อาจถูกลบตามระยะเวลาเก็บ)');
+      const out = toWav(new Uint8Array(clip.data), clip.rate);
+      return new Response(out, { headers: { 'Content-Type': 'audio/wav', 'Content-Length': String(out.length), 'Cache-Control': 'private, max-age=86400', ...CORS } });
+    }
+    if (!env.REC) return fail(404, 'ไม่พบไฟล์เสียง');
+    const obj = key && await env.REC.get(key);
+    if (!obj) return fail(404, 'ไม่พบไฟล์เสียง (อาจถูกลบตามระยะเวลาเก็บ)');
+    return new Response(obj.body, { headers: { 'Content-Type': 'audio/wav', 'Content-Length': String(obj.size), 'Cache-Control': 'private, max-age=86400', ...CORS } });
+  }
+  if (p === '/api/log' && m === 'GET') {
+    if (!roleAtLeast(me.role, 'lead')) return fail(403, 'ไม่มีสิทธิ์ใช้งานส่วนนี้');
+    return log(env, url);
+  }
+
+  // ---------------------------------------------------------------- tasks (งานของฉัน)
+  if (p === '/api/tasks' && m === 'GET') {
+    const scope = url.searchParams.get('scope') || 'today';
+    const base = `SELECT t.*, a.name AS assignee_name, c.name AS creator_name FROM tasks t
+                  JOIN users a ON a.id = t.assignee_id JOIN users c ON c.id = t.created_by`;
+    let rows;
+    if (scope === 'assigned') rows = await db.prepare(`${base} WHERE t.created_by = ? ORDER BY t.done_at IS NOT NULL, t.due_at LIMIT 200`).bind(me.id).all();
+    else if (scope === 'all') rows = await db.prepare(`${base} WHERE t.assignee_id = ? ORDER BY t.done_at IS NOT NULL, t.due_at LIMIT 200`).bind(me.id).all();
+    else {
+      const start = Number(url.searchParams.get('dayStart')) || new Date().setHours(0, 0, 0, 0);
+      // today = everything still open + what was finished today
+      rows = await db.prepare(`${base} WHERE t.assignee_id = ? AND (t.done_at IS NULL OR t.done_at >= ?)
+                               ORDER BY t.done_at IS NOT NULL, t.due_at IS NULL, t.due_at LIMIT 200`).bind(me.id, start).all();
+    }
+    return json(rows.results);
+  }
+  if (p === '/api/tasks' && m === 'POST') {
+    if (!roleAtLeast(me.role, 'lead')) return fail(403, 'เฉพาะหัวหน้าหรือผู้ดูแลระบบที่มอบงานได้');
+    const b = await readJson(req);
+    const title = str(b.title, 120);
+    if (!title) return fail(400, 'กรุณาใส่ชื่องาน');
+    let ids = Array.isArray(b.assignee_ids) ? b.assignee_ids.map(Number).filter(Boolean) : [];
+    if (b.channel_id) ids = ids.concat((await db.prepare('SELECT id FROM users WHERE main_channel = ? AND active = 1').bind(Number(b.channel_id)).all()).results.map(r => r.id));
+    ids = [...new Set(ids)];
+    if (!ids.length) return fail(400, 'กรุณาเลือกผู้รับงาน');
+    const due = Number(b.due_at) || null, now = Date.now();
+    for (const uid of ids) {
+      const r = await db.prepare('INSERT INTO tasks (title, detail, due_at, assignee_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(title, str(b.detail, 500), due, uid, me.id, now).run();
+      await notify(env, { userId: uid, kind: 'task', title: `งานใหม่: ${title}`, body: `มอบโดย ${me.name}`, ref: `task:${r.meta.last_row_id}` });
+    }
+    return json({ ok: true, count: ids.length });
+  }
+  if (seg[1] === 'tasks' && id && m === 'PATCH') {
+    const t = await db.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first();
+    if (!t) return fail(404, 'ไม่พบงาน');
+    if (t.assignee_id !== me.id && t.created_by !== me.id && !roleAtLeast(me.role, 'admin')) return fail(403, 'ไม่มีสิทธิ์แก้งานนี้');
+    const b = await readJson(req);
+    await db.prepare('UPDATE tasks SET done_at = ? WHERE id = ?').bind(b.done ? Date.now() : null, id).run();
+    if (b.done && t.created_by !== me.id) await notify(env, { userId: t.created_by, kind: 'task', title: `งานเสร็จแล้ว: ${t.title}`, body: `โดย ${me.name}`, ref: `task:${id}` });
+    return json({ ok: true });
+  }
+  if (seg[1] === 'tasks' && id && m === 'DELETE') {
+    const t = await db.prepare('SELECT created_by FROM tasks WHERE id = ?').bind(id).first();
+    if (!t) return fail(404, 'ไม่พบงาน');
+    if (t.created_by !== me.id && !roleAtLeast(me.role, 'admin')) return fail(403, 'ลบได้เฉพาะคนที่มอบงาน');
+    await db.prepare('DELETE FROM tasks WHERE id = ?').bind(id).run();
+    return json({ ok: true });
+  }
+
+  // ---------------------------------------------------------------- SOS
+  if (p === '/api/sos' && m === 'GET') {
+    const { results } = await db.prepare(
+      `SELECT s.*, u.name AS reporter, u.dept AS reporter_dept, (SELECT COUNT(*) FROM sos_acks a WHERE a.sos_id = s.id) AS acks,
+              EXISTS(SELECT 1 FROM sos_acks a WHERE a.sos_id = s.id AND a.user_id = ?) AS acked
+       FROM sos s JOIN users u ON u.id = s.user_id ORDER BY s.id DESC LIMIT 30`).bind(me.id).all();
+    return json(results);
+  }
+  if (p === '/api/sos' && m === 'POST') {
+    const b = await readJson(req);
+    if (!SOS_KINDS[b.kind]) b.kind = 'general';            // one-press SOS: no type to choose
+    const recent = await db.prepare('SELECT COUNT(*) AS n FROM sos WHERE user_id = ? AND ts > ?').bind(me.id, Date.now() - 60_000).first('n');
+    if (recent >= 3) return fail(429, 'แจ้งเหตุถี่เกินไป รอสักครู่');
+    const lat = Number.isFinite(Number(b.lat)) && b.lat !== null ? Number(b.lat) : null;
+    const lng = Number.isFinite(Number(b.lng)) && b.lng !== null ? Number(b.lng) : null;
+    const r = await db.prepare('INSERT INTO sos (ts, user_id, kind, note, place, lat, lng) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(Date.now(), me.id, b.kind, str(b.note, 300), str(b.place, 120), lat, lng).run();
+    const sos = { id: r.meta.last_row_id, ts: Date.now(), kind: b.kind, kind_name: SOS_KINDS[b.kind], note: str(b.note, 300), place: str(b.place, 120), lat, lng,
+                  reporter: me.name, reporter_dept: me.dept, user_id: me.id, status: 'open', acks: 0 };
+    await db.prepare('INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, NULL, ?, ?, ?, ?)')
+      .bind(sos.ts, 'sos', `แจ้งเหตุฉุกเฉิน: ${sos.kind_name}`, `${me.name} (${me.dept || '-'})${sos.place ? ' · ' + sos.place : ''}`, `sos:${sos.id}`).run();
+    const { delivered } = await roomCall(env, '/broadcast', { msg: { type: 'sos', sos } });
+    return json({ ...sos, delivered });
+  }
+  if (seg[1] === 'sos' && id && seg[3] === 'ack' && m === 'POST') {
+    await db.prepare('INSERT OR IGNORE INTO sos_acks (sos_id, user_id, ts) VALUES (?, ?, ?)').bind(id, me.id, Date.now()).run();
+    const acks = await db.prepare('SELECT COUNT(*) AS n FROM sos_acks WHERE sos_id = ?').bind(id).first('n');
+    await roomCall(env, '/broadcast', { msg: { type: 'sos_ack', id, by: me.name, acks } });
+    return json({ ok: true, acks });
+  }
+  if (seg[1] === 'sos' && id && seg[3] === 'close' && m === 'POST') {
+    if (!roleAtLeast(me.role, 'lead')) return fail(403, 'เฉพาะหัวหน้าหรือผู้ดูแลระบบที่ปิดเหตุได้');
+    await db.prepare(`UPDATE sos SET status = 'closed', closed_by = ?, closed_at = ? WHERE id = ?`).bind(me.id, Date.now(), id).run();
+    await roomCall(env, '/broadcast', { msg: { type: 'sos_closed', id, by: me.name } });
+    return json({ ok: true });
+  }
+
+  // ---------------------------------------------------------------- map
+  if (p === '/api/map' && m === 'GET') {
+    const { results } = await db.prepare('SELECT p.*, c.name AS channel_name FROM map_pins p LEFT JOIN channels c ON c.id = p.channel_id ORDER BY p.id').all();
+    const has = await db.prepare(`SELECT 1 AS x FROM settings WHERE key = 'map_image'`).first('x');
+    return json({ pins: results, image: !!has });
+  }
+  if (p === '/api/map/image' && m === 'GET') return imageResponse(await db.prepare(`SELECT value FROM settings WHERE key = 'map_image'`).first('value'));
+  if (p === '/api/map/image' && m === 'PUT') {
+    if (!roleAtLeast(me.role, 'admin')) return fail(403, 'เฉพาะผู้ดูแลระบบ');
+    const b = await readJson(req);
+    if (!b.data) await db.prepare(`DELETE FROM settings WHERE key = 'map_image'`).run();
+    else await db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('map_image', ?)`).bind(dataUrl(b.data, 1_400_000)).run();
+    return json({ ok: true });
+  }
+  if (seg[1] === 'map' && seg[2] === 'pins') {
+    if (!roleAtLeast(me.role, 'admin')) return fail(403, 'เฉพาะผู้ดูแลระบบ');
+    const pid = Number(seg[3]);
+    if (m === 'DELETE' && pid) { await db.prepare('DELETE FROM map_pins WHERE id = ?').bind(pid).run(); return json({ ok: true }); }
+    const b = await readJson(req);
+    const v = [str(b.name, 40) || 'จุดใหม่', ICONS.includes(b.icon) ? b.icon : 'pin', COLORS.includes(b.color) ? b.color : 'blue',
+      Math.min(Math.max(Number(b.x) || 50, 0), 100), Math.min(Math.max(Number(b.y) || 50, 0), 100), Number(b.channel_id) || null, str(b.note, 200)];
+    const coord = (val, lim) => (val === null || val === undefined || val === '' || !Number.isFinite(Number(val)) || Math.abs(Number(val)) > lim ? null : Number(val));
+    v.push(coord(b.lat, 90), coord(b.lng, 180));
+    if (m === 'POST') { const r = await db.prepare('INSERT INTO map_pins (name, icon, color, x, y, channel_id, note, lat, lng) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(...v).run(); return json({ id: r.meta.last_row_id }); }
+    if (m === 'PATCH' && pid) { await db.prepare('UPDATE map_pins SET name = ?, icon = ?, color = ?, x = ?, y = ?, channel_id = ?, note = ?, lat = ?, lng = ? WHERE id = ?').bind(...v, pid).run(); return json({ ok: true }); }
+  }
+
+  // ---------------------------------------------------------------- notifications
+  if (p === '/api/notifications' && m === 'GET') {
+    const lr = (await db.prepare('SELECT last_read FROM notif_reads WHERE user_id = ?').bind(me.id).first('last_read')) || 0;
+    const { results } = await db.prepare('SELECT * FROM notifications WHERE user_id IS NULL OR user_id = ? ORDER BY ts DESC LIMIT 60').bind(me.id).all();
+    return json(results.map(n => ({ ...n, read: n.ts <= lr })));
+  }
+  if (p === '/api/notifications/read' && m === 'POST') {
+    await db.prepare('INSERT OR REPLACE INTO notif_reads (user_id, last_read) VALUES (?, ?)').bind(me.id, Date.now()).run();
+    return json({ ok: true });
+  }
+
+  // ---------------------------------------------------------------- report (lead+)
+  if (p === '/api/report' && m === 'GET') {
+    if (!roleAtLeast(me.role, 'lead')) return fail(403, 'ไม่มีสิทธิ์ใช้งานส่วนนี้');
+    const days = Math.min(Number(url.searchParams.get('days')) || 7, 90);
+    const from = Date.now() - days * 86_400_000;
+    const [users, chans, notes, byDept, byChan, online, talkMs] = await Promise.all([
+      db.prepare('SELECT COUNT(*) AS n FROM users WHERE active = 1').first('n'),
+      db.prepare('SELECT COUNT(*) AS n FROM channels WHERE active = 1').first('n'),
+      db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE ts > ?').bind(from).first('n'),
+      db.prepare(`SELECT COALESCE(NULLIF(u.dept, ''), NULLIF(m.dept, ''), 'ไม่ระบุ') AS dept, COUNT(*) AS n FROM messages m LEFT JOIN users u ON u.id = m.user_id
+                  WHERE m.ts > ? GROUP BY 1 ORDER BY n DESC LIMIT 12`).bind(from).all(),
+      db.prepare('SELECT channel, COUNT(*) AS n FROM messages WHERE ts > ? GROUP BY channel ORDER BY n DESC').bind(from).all(),
+      roomCall(env, '/online'),
+      db.prepare(`SELECT COALESCE(SUM(ms), 0) AS ms, COUNT(*) AS n FROM messages WHERE kind = 'talk' AND ts > ?`).bind(from).first(),
+    ]);
+    const sos = await db.prepare('SELECT COUNT(*) AS n FROM sos WHERE ts > ?').bind(from).first('n');
+    return json({ days, users, online: online.length, channels: chans, notifications: notes, sos, talks: talkMs.n, talk_ms: talkMs.ms, byDept: byDept.results, byChannel: byChan.results });
+  }
+
+  // ---------------------------------------------------------------- admin
+  if (seg[1] === 'admin') {
+    if (!roleAtLeast(me.role, 'admin')) return fail(403, 'เฉพาะผู้ดูแลระบบ');
+    const aid = Number(seg[3]);
+    if (seg[2] === 'users') {
+      if (m === 'GET') return json((await db.prepare(`SELECT ${PUBLIC_USER}, c.name AS main_channel_name FROM users u LEFT JOIN channels c ON c.id = u.main_channel ORDER BY u.active DESC, u.name`).all()).results);
+      const b = await readJson(req);
+      const fields = { emp: str(b.emp, 32), name: str(b.name, 40), dept: str(b.dept, 40), position: str(b.position, 60),
+        main_channel: Number(b.main_channel) || null, role: ROLES.includes(b.role) ? b.role : 'user' };
+      if (m === 'POST') {
+        if (!fields.emp || !fields.name) return fail(400, 'กรุณาใส่รหัสพนักงานและชื่อ');
+        if (String(b.password || '').length < 6) return fail(400, 'รหัสผ่านต้องยาวอย่างน้อย 6 ตัว');
+        if (await db.prepare('SELECT 1 AS x FROM users WHERE emp = ?').bind(fields.emp).first('x')) return fail(409, 'รหัสพนักงานนี้มีอยู่แล้ว');
+        const r = await db.prepare('INSERT INTO users (emp, name, dept, position, main_channel, role, pass, created_at, must_change) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)')
+          .bind(fields.emp, fields.name, fields.dept, fields.position, fields.main_channel, fields.role, await hashPassword(String(b.password)), Date.now()).run();
+        return json({ id: r.meta.last_row_id });
+      }
+      if (m === 'PATCH' && aid) {
+        const cur = await db.prepare('SELECT * FROM users WHERE id = ?').bind(aid).first();
+        if (!cur) return fail(404, 'ไม่พบผู้ใช้');
+        const active = 'active' in b ? (b.active ? 1 : 0) : cur.active;
+        if (aid === me.id && (fields.role !== 'admin' || !active)) return fail(400, 'ลดสิทธิ์หรือปิดบัญชีตัวเองไม่ได้');
+        if (fields.emp && fields.emp.toLowerCase() !== cur.emp.toLowerCase() && await db.prepare('SELECT 1 AS x FROM users WHERE emp = ?').bind(fields.emp).first('x')) return fail(409, 'รหัสพนักงานนี้มีอยู่แล้ว');
+        await db.prepare('UPDATE users SET emp = ?, name = ?, dept = ?, position = ?, main_channel = ?, role = ?, active = ? WHERE id = ?')
+          .bind(fields.emp || cur.emp, fields.name || cur.name, fields.dept, fields.position, fields.main_channel, fields.role, active, aid).run();
+        if (b.password) {
+          if (String(b.password).length < 6) return fail(400, 'รหัสผ่านต้องยาวอย่างน้อย 6 ตัว');
+          await db.prepare('UPDATE users SET pass = ?, must_change = 1 WHERE id = ?').bind(await hashPassword(String(b.password)), aid).run();
+        }
+        if (b.password || !active) await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(aid).run();   // force re-login
+        return json({ ok: true });
+      }
+    }
+    if (seg[2] === 'channels') {
+      if (m === 'GET') return json((await db.prepare('SELECT id, name, sub, icon, color, sort, active, created_by, created_at, (pass IS NOT NULL) AS locked FROM channels ORDER BY active DESC, sort, id').all()).results);
+      const b = await readJson(req);
+      const v = [str(b.name, 40), str(b.sub, 60), ICONS.includes(b.icon) ? b.icon : 'radio', COLORS.includes(b.color) ? b.color : 'blue', Number(b.sort) || 100];
+      if (m === 'POST') {
+        if (!v[0]) return fail(400, 'กรุณาใส่ชื่อกลุ่ม');
+        try { await db.prepare('INSERT INTO channels (name, sub, icon, color, sort) VALUES (?, ?, ?, ?, ?)').bind(...v).run(); }
+        catch { return fail(409, 'มีกลุ่มชื่อนี้แล้ว'); }
+      } else if (m === 'PATCH' && aid) {
+        await db.prepare('UPDATE channels SET name = ?, sub = ?, icon = ?, color = ?, sort = ?, active = ? WHERE id = ?').bind(...v, 'active' in b ? (b.active ? 1 : 0) : 1, aid).run();
+      } else if (m === 'DELETE' && aid) {
+        await deleteChannel(db, aid);
+      } else return fail(405, 'not allowed');
+      if (m === 'PATCH' && 'password' in b) await db.prepare('UPDATE channels SET pass = ? WHERE id = ?').bind(b.password ? await hashPassword(String(b.password)) : null, aid).run();
+      await roomCall(env, '/reload');
+      return json({ ok: true });
+    }
+    if (seg[2] === 'announce' && m === 'POST') {
+      const b = await readJson(req);
+      if (!str(b.title, 80)) return fail(400, 'กรุณาใส่หัวข้อ');
+      return json(await notify(env, { kind: 'system', title: str(b.title, 80), body: str(b.body, 300) }));
+    }
+  }
+  return fail(404, 'not found');
+}
+
+async function log(env, url) {
+  const p = url.searchParams;
+  const to = Number(p.get('to')) || Date.now();
+  const from = Number(p.get('from')) || to - 7 * 86_400_000;
+  const limit = Math.min(Math.max(Number(p.get('limit')) || 200, 1), 5000);
+  const channel = p.get('channel');
+  const events = (p.get('events') || 'talk,join,leave').split(',').filter(e => ['talk', 'join', 'leave'].includes(e));
+  if (!events.length) return json([]);
+  let sql = `SELECT ts, event, channel, name, ms, reason FROM walkie_log WHERE ts BETWEEN ? AND ? AND event IN (${events.map(() => '?').join(',')})`;
+  const args = [from, to, ...events];
+  if (channel) { sql += ' AND channel = ?'; args.push(channel); }
+  sql += ' ORDER BY ts DESC LIMIT ?';
+  args.push(limit);
+  const { results } = await env.DB.prepare(sql).bind(...args).all();
+  if (p.get('format') === 'csv') {
+    const fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok', dateStyle: 'short', timeStyle: 'medium' });
+    const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = ['เวลา (ไทย),เหตุการณ์,ช่อง,ชื่อ,วินาที,เหตุผล'];
+    for (const r of results) lines.push([fmt.format(r.ts), r.event, r.channel, r.name, r.ms == null ? '' : (r.ms / 1000).toFixed(1), r.reason].map(q).join(','));
+    return new Response('﻿' + lines.join('\r\n'), {
+      headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="walkie-log.csv"', ...API },
+    });
+  }
+  return json(results);
+}

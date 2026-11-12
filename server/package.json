@@ -1,0 +1,14 @@
+{
+  "name": "walkie-demo",
+  "version": "0.1.0",
+  "description": "วอภายใน - push-to-talk demo (Node.js + WebSocket)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "cert": "mkdir -p cert && openssl req -x509 -newkey rsa:2048 -nodes -keyout cert/key.pem -out cert/cert.pem -days 365 -subj /CN=walkie",
+    "test": "node test/protocol.test.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

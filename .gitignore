@@ -1,0 +1,28 @@
+# dependencies / build output
+node_modules/
+.wrangler/
+app/www/
+app/android/.gradle/
+app/android/build/
+app/android/app/build/
+app/android/capacitor-cordova-android-plugins/
+app/android/local.properties
+*.apk
+*.aab
+
+# secrets and private data (never commit)
+.dev.vars
+*.env
+*.keystore
+*.jks
+# employee list exported from Google Sheets
+cloudflare/data/
+
+# editor / OS
+.claude/
+.vscode/
+Thumbs.db
+.DS_Store
+app/android/app/src/main/assets/public/
+app/android/app/src/main/assets/capacitor.config.json
+app/android/app/src/main/assets/capacitor.plugins.json
