@@ -1898,16 +1898,16 @@ ROUTES.audio = () => {
   const pr = { ...S.prefs };
   mount(`<div class="page">${header('ตั้งค่าเสียง')}<div class="scroll">
     <div class="list">
-      <label class="setrow">${icon('bell', 'i lead')}<div class="grow"><b>เสียงแจ้งเตือน</b><small>เสียงบี๊บตอนเริ่ม/จบการพูด</small></div><input type="checkbox" class="sw" id="pBeep" ${pr.beep ? 'checked' : ''}></label>
-      <label class="setrow web-only">${icon('wave', 'i lead')}<div class="grow"><b>Noise Cancellation</b><small>ลดเสียงรบกวนจากเครื่องจักร</small></div><input type="checkbox" class="sw" id="pNc" ${pr.nc ? 'checked' : ''}></label>
+      <label class="setrow">${icon('bell', 'i lead')}<div class="grow"><b>เสียงแจ้งเตือน</b><small>เสียง “ปิ๊บ” ตอนมีคนเริ่มพูดและพูดจบ</small></div><input type="checkbox" class="sw" id="pBeep" ${pr.beep ? 'checked' : ''}></label>
+      <label class="setrow web-only">${icon('wave', 'i lead')}<div class="grow"><b>ลดเสียงรบกวน</b><small>ตัดเสียงเครื่องจักร/ลมออกจากไมค์ตอนคุณพูด (Noise Cancellation)</small></div><input type="checkbox" class="sw" id="pNc" ${pr.nc ? 'checked' : ''}></label>
       <div class="setrow web-only" style="flex-wrap:wrap">${icon('volume', 'i lead')}<div class="grow"><b>ระดับเสียง (<span id="volV">${pr.volume}</span>%)</b></div>
         <input type="range" id="pVol" min="0" max="100" step="5" value="${pr.volume}" aria-label="ระดับเสียง" style="flex-basis:100%"></div>
-      <div class="setrow">${icon('mic', 'i lead')}<div class="grow"><b>โหมด Push to Talk</b><small id="modeTxt"></small></div></div>
+      <div class="setrow">${icon('mic', 'i lead')}<div class="grow"><b>วิธีกดพูด</b><small id="modeTxt"></small></div></div>
       <div style="padding:0 16px 16px" class="chips" id="pMode"><button data-v="hold" class="${pr.mode === 'hold' ? 'on' : ''}">กดค้างเพื่อพูด (Hold to Talk)</button><button data-v="toggle" class="${pr.mode === 'toggle' ? 'on' : ''}">แตะเพื่อเริ่ม/จบ</button></div>
     </div>
     <div class="list native-only">
       <label class="setrow">${icon('headset', 'i lead')}<div class="grow"><b>ปุ่มหูฟังเป็นปุ่มกดพูด</b><small>กดค้าง = พูด · กดสั้น = เริ่ม, กดอีกครั้ง = จบ</small></div><input type="checkbox" class="sw" id="optHeadset"></label>
-      <label class="setrow">${icon('radio', 'i lead')}<div class="grow"><b>ปุ่ม PTT มือถือ rugged</b><small>Samsung XCover, Sonim ฯลฯ</small></div><input type="checkbox" class="sw" id="optRugged"></label>
+      <label class="setrow">${icon('radio', 'i lead')}<div class="grow"><b>ปุ่มข้างเครื่องของมือถือสายลุย</b><small>ใช้ปุ่ม PTT ที่ติดมากับเครื่อง เช่น Samsung XCover, Sonim (PTT = ปุ่มกดค้างเพื่อพูด)</small></div><input type="checkbox" class="sw" id="optRugged"></label>
     </div>
     <div class="pad"><button class="btn primary" id="pSave">บันทึกการตั้งค่า</button></div></div></div>`, root => {
     bindBack(root, 'settings');
@@ -1939,10 +1939,10 @@ ROUTES.settings = () => {
       ${row('sInfo', 'user', 'ข้อมูลส่วนตัว')}
       ${S.user ? row('sPhoto', 'camera', 'เปลี่ยนรูปโปรไฟล์', 'ถ่ายรูป หรือเลือกจากคลังภาพ') : ''}
       ${row('sNotif', 'bell', 'การแจ้งเตือน', 'Notification' in window ? (Notification.permission === 'granted' ? 'เปิดอยู่' : Notification.permission === 'denied' ? 'ถูกปิดในเบราว์เซอร์' : 'แตะเพื่ออนุญาต') : 'เบราว์เซอร์ไม่รองรับ')}
-      ${row('sAudio', 'headset', 'อุปกรณ์เสียง (PTT)')}
+      ${row('sAudio', 'headset', 'ตั้งค่าเสียงและปุ่มพูด', 'เสียงบี๊บ ระดับเสียง ลดเสียงรบกวน และวิธีกดพูด')}
       ${row('sLang', 'globe', 'ภาษา', '', '<span class="small muted">ไทย</span>')}
       ${row('sTheme', curTheme() === 'dark' ? 'moon' : 'sun', 'ธีม', '', `<span class="small muted">${curTheme() === 'dark' ? 'กลางคืน (มืด)' : 'ภาคสนาม (สว่าง)'}</span>`)}
-      <label class="setrow web-only">${icon('sun', 'i lead')}<div class="grow"><b>เปิดจอค้างไว้ระหว่างใช้งาน</b><small>ได้ยินเสียงแน่นอนที่สุดสำหรับเว็บแอป</small></div><input type="checkbox" class="sw" id="optWake" ${wakeOn() ? 'checked' : ''}></label>
+      <label class="setrow web-only">${icon('sun', 'i lead')}<div class="grow"><b>ให้จอติดค้างไว้</b><small>จอไม่ดับขณะเปิดแอป จะได้ยินเสียงแน่นอนที่สุด (กินแบตเพิ่ม)</small></div><input type="checkbox" class="sw" id="optWake" ${wakeOn() ? 'checked' : ''}></label>
       <div class="setrow" style="background:color-mix(in srgb, #cf2020 8%, transparent)">${icon('siren', 'i lead')}<div class="grow"><b>เหตุฉุกเฉิน (SOS) ดังเสมอ</b><small>ดังเสมอเมื่อเข้าสู่ระบบ${pushState() === 'off' ? ' · <b style="color:var(--err-fg)">ยังไม่ได้อนุญาตการแจ้งเตือน</b>' : ''}</small></div>${pushState() === 'off' ? '<button class="btn sm primary" id="sPush" type="button">อนุญาต</button>' : '<span class="small muted">เปิดอยู่</span>'}</div>
       <label class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินเสียงคุยเมื่อพับ / ปิดแอป</b><small>${NATIVE ? 'ได้ยินแม้ปิดแอป' : IOS ? 'iPhone อาจเงียบเมื่อพับนาน' : 'ได้ยินเมื่อพับแอปหรือปิดจอ'}</small></div><input type="checkbox" class="sw" id="optKeep" ${keepOn() ? 'checked' : ''}></label>
       ${!NATIVE && !standalone() ? row('sInstall', 'download', 'ติดตั้งแอปลงหน้าจอ', installEvt ? 'แตะเพื่อติดตั้ง ใช้งานเต็มจอเหมือนแอป' : IOS ? 'Safari: ปุ่มแชร์ > เพิ่มไปยังหน้าจอโฮม' : 'แตะเพื่อดูวิธีติดตั้ง') : ''}
@@ -1952,8 +1952,8 @@ ROUTES.settings = () => {
       ${row('sInvite', 'qr', 'เชิญเพื่อนร่วมทีม', 'แสดง QR ให้สแกนเปิดแอป')}
       ${row('sMembers', 'team', 'สมาชิกทีมงาน')}
       ${lead ? row('sReport', 'chart', 'รายงานการใช้งาน') : ''}
-      ${lead ? row('sLog', 'download', 'Log ละเอียด / ส่งออก CSV') : ''}
-      ${admin ? row('sAdmin', 'settings', 'จัดการระบบ (Admin)', 'สมาชิก กลุ่ม สิทธิ์ ประกาศ') : ''}
+      ${lead ? row('sLog', 'download', 'Log ละเอียด / ส่งออก CSV', 'ประวัติว่าใครพูด/พิมพ์ที่ไหนเมื่อไร · CSV = ไฟล์เปิดใน Excel') : ''}
+      ${admin ? row('sAdmin', 'settings', 'จัดการระบบ (ผู้ดูแล)', 'เพิ่ม/ลบสมาชิก กลุ่ม สิทธิ์ ประกาศ') : ''}
     </div>
     <div class="list">
       ${row('sHelp', 'help', 'วิธีใช้')}
@@ -1987,6 +1987,18 @@ function help() {
     ${step('siren', 'ฉุกเฉิน', 'SOS → กดค้าง 1 วินาที ทุกเครื่องดัง')}
     ${step('bell', 'เตือน', 'บันทึก / เตือน → ตั้งเวลา')}
   </ol>
+  <h4 style="margin:14px 4px 6px">ความหมายของคำที่ใช้</h4>
+  <dl class="gloss">
+    <dt>PTT</dt><dd>Push To Talk = กดปุ่มค้างเพื่อพูด ปล่อยแล้วจบ (แบบวิทยุสื่อสาร)</dd>
+    <dt>ห้อง / กลุ่ม</dt><dd>ช่องคุยของทีมหนึ่ง ๆ คนในห้องเดียวกันได้ยินกัน “ทุกคน” คือห้องรวมที่ทุกคนอยู่</dd>
+    <dt>ห้องที่พูด</dt><dd>ห้องที่เสียงคุณจะถูกส่งไป คุณยังฟังห้องอื่นที่เข้าไว้ได้พร้อมกัน</dd>
+    <dt>วอส่วนตัว</dt><dd>คุยกับคนเดียว ต้องให้อีกฝ่ายออนไลน์และกดรับสาย</dd>
+    <dt>SOS</dt><dd>แจ้งเหตุฉุกเฉิน ทุกเครื่องที่ล็อกอินอยู่จะมีเสียงเตือนพร้อมชื่อคนแจ้ง</dd>
+    <dt>ปิดเสียงห้อง</dt><dd>ปุ่มลำโพงข้างชื่อห้อง ยังอยู่ในห้องและเห็นแชท แค่ไม่ได้ยินเสียงพูด</dd>
+    <dt>ลดเสียงรบกวน</dt><dd>Noise Cancellation ตัดเสียงเครื่องจักรออกจากเสียงพูดของคุณ</dd>
+    <dt>Log</dt><dd>บันทึกประวัติการใช้งาน เก็บเสียง 3 วัน แชท 24 ชม. แล้วลบเอง</dd>
+    <dt>ติดตั้งแอป</dt><dd>เพิ่มไอคอนบนหน้าจอมือถือ เปิดเต็มจอเหมือนแอปทั่วไป</dd>
+  </dl>
   ${!NATIVE && !standalone() ? '<button class="btn primary" type="button" id="hInstall">ติดตั้งแอปลงหน้าจอ</button>' : ''}`, () => { const b = $('hInstall'); if (b) b.onclick = doInstall; });
 }
 function about() {

@@ -457,3 +457,8 @@ select.sel-sm { min-height:40px; padding:6px 34px 6px 12px; border-radius:10px; 
 .chmute svg { width:24px; height:24px; }
 .chmute:hover, .chmute:focus-visible { background:rgba(255,255,255,.12); outline:none; }
 .chmute.off { color:#ff9a8a; background:rgba(255,90,70,.14); }
+
+/* glossary in the help sheet */
+.gloss { margin:0 4px 6px; font-size:14px; line-height:1.4; }
+.gloss dt { font-weight:700; margin-top:8px; }
+.gloss dd { margin:2px 0 0; color:var(--muted); }
