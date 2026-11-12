@@ -292,14 +292,18 @@ function joinNow(channel) {
   if (NATIVE) return WN.switchChannel({ channel: ch });
   sendMsg({ type: 'join', token: S.token || undefined, name: S.profile.name, dept: S.profile.dept, uid: S.uid, channel: ch, rooms: ACC() ? roomsWith(ch) : undefined });
 }
-function renderRoomChips() {
-  const box = $('roomChips'); if (!box || !S.me || !ACC()) return;
-  const rooms = (S.me.rooms || [S.me.channel]).filter(Boolean);
-  const talkingIn = new Set((S.roster || []).filter(u => u.talking).flatMap(u => u.rooms || []));
-  box.innerHTML = '<span class="small">ฟังอยู่:</span>' + rooms.map(r => `<button type="button" class="rchip ${r === S.me.channel ? 'on' : ''}" data-room="${esc(r)}" aria-pressed="${r === S.me.channel}">${S.hearing && S.hearing.channel === r ? '🔊 ' : ''}${esc(roomLabel(r))}${r === S.me.channel ? ' · พูด' : ''}</button>`).join('')
-    + '<button type="button" class="rchip add" data-room-add>+ เพิ่มห้อง</button>';
-  for (const b of $$('[data-room]', box)) b.onclick = () => setTalkRoom(b.dataset.room);
-  const add = box.querySelector('[data-room-add]'); if (add) add.onclick = () => go('channels', { then: 'ptt' });
+/** drop-down options: my rooms first, then the other rooms, then create / see all */
+function roomOptionsHtml() {
+  const cur = (S.me && S.me.channel) || '';
+  const mine = ((S.me && S.me.rooms) || [cur]).filter(r => r && !isDm(r));
+  if (cur && !isDm(cur) && !mine.includes(cur)) mine.unshift(cur);
+  const lab = n => { const c = S.channels.find(x => x.name === n), cnt = S.counts[n]; return `${c && c.locked ? '🔒 ' : ''}${roomLabel(n)}${cnt != null ? ` · ${cnt} คน` : ''}`; };
+  const opt = n => `<option value="${esc(n)}" ${n === cur ? 'selected' : ''}>${esc(lab(n))}</option>`;
+  const others = S.channels.filter(c => !mine.includes(c.name) && !isDm(c.name));
+  return (cur ? '' : '<option value="" selected disabled>เลือกห้อง…</option>')
+    + (mine.length ? `<optgroup label="ห้องของฉัน">${mine.map(opt).join('')}</optgroup>` : '')
+    + (others.length ? `<optgroup label="ห้องอื่น">${others.map(c => opt(c.name)).join('')}</optgroup>` : '')
+    + '<optgroup label="อื่น ๆ"><option value="__new">＋ สร้างห้องใหม่…</option><option value="__all">☰ ดูห้องทั้งหมด…</option></optgroup>';
 }
 /** just change which of my rooms I talk into */
 function setTalkRoom(name) { if (!S.me || S.me.channel === name) return; stopTalking(true); joinNow(name); }
@@ -542,7 +546,6 @@ function renderTalk() {
   for (const el of $$('[data-chcount]')) el.textContent = `${cnt} คนออนไลน์`;
   const hb = $('hearBar');
   if (hb) { hb.classList.toggle('hidden', !other); if (other) hb.innerHTML = `${icon('volume')}<span><b>${esc(t)}</b> กำลังพูด${where ? ` · ห้อง <b>${esc(where)}</b>` : ''}</span>`; }
-  renderRoomChips();
   updateMediaSession();
 }
 const levels = new Array(48).fill(0);
@@ -935,9 +938,9 @@ ROUTES.ptt = () => {
       <button class="ib" id="spk" aria-label="${S.prefs.speaker ? 'ปิดเสียงลำโพง' : 'เปิดเสียงลำโพง'}">${icon(S.prefs.speaker ? 'volume' : 'mute')}</button></header>
     <div class="hearbar hidden" id="hearBar" role="status" aria-live="polite"></div>
     <div class="lbl2">พูดเข้าห้อง</div>
-    <button class="chcard" id="chPick">${ch ? chanIcon(ch) : `<span class="ic">${icon('radio')}</span>`}
-      <span class="grow"><b class="ell">${esc(ch ? ch.name : S.me ? 'ยังไม่ได้เข้าห้อง – แตะเพื่อเลือก/สร้างห้อง' : 'กำลังเชื่อมต่อ…')}</b><small>${icon('user')}<span data-chcount></span></small></span>${icon('down')}</button>
-    <div class="roomchips" id="roomChips" aria-label="ห้องที่ฟังอยู่"></div>
+    <div class="chcard" id="chPick">${ch ? chanIcon(ch) : `<span class="ic">${icon('radio')}</span>`}
+      <span class="grow"><b class="ell">${esc(ch ? (ch.dm ? ch.name : roomLabel(S.me.channel)) : S.me ? 'เลือกห้อง' : 'กำลังเชื่อมต่อ…')}</b><small>${icon('user')}<span data-chcount></span></small></span>${icon('down')}
+      <select class="chsel" id="chSel" aria-label="เลือกห้องที่จะพูด" ${!S.me || (ch && ch.dm) ? 'disabled' : ''}>${roomOptionsHtml()}</select></div>
     <button class="btn primary unlock hidden" id="unlockBtn" type="button" style="width:auto;margin-top:10px">${icon('volume')}แตะเพื่อเปิดเสียง</button>
     <div class="pttstage">
       <button class="ptt" id="pttBig" data-ptt type="button" aria-describedby="pttStatus"></button>
@@ -955,7 +958,15 @@ ROUTES.ptt = () => {
   </div>`, root => {
     bindBack(root);
     bindPtt($('pttBig'));
-    $('chPick').onclick = () => go('channels', { then: 'ptt' });
+    const sel = $('chSel');
+    if (sel) sel.onchange = () => {
+      const v = sel.value, cur = S.me && S.me.channel || '';
+      sel.value = cur;                                   // the card changes only once the server confirms
+      if (v === '__new') return createRoomSheet('ptt');
+      if (v === '__all') return go('channels', { then: 'ptt' });
+      if (!v || v === cur) return;
+      if ((S.me.rooms || []).includes(v)) setTalkRoom(v); else enterRoom(v, 'ptt');
+    };
     $('toChat').onclick = () => go('chat');
     if ($('hangUp')) $('hangUp').onclick = () => { endCall(); toast('วางสายแล้ว'); };
     if ($('shareRoom')) $('shareRoom').onclick = () => shareRoom(ch);
@@ -1120,7 +1131,7 @@ function confirmRoom(c, then) {
   sheet(`<div style="text-align:center">
       <div style="display:flex;justify-content:center;margin:4px 0 8px">${chanIcon(c)}</div>
       <h3 style="margin:4px 0">เข้ากลุ่ม “${esc(c.name)}” ?</h3>
-      <p class="small muted" style="margin:4px 0 16px">${S.counts[c.name] || 0} คนออนไลน์${c.sub ? ' · ' + esc(c.sub) : ''}${c.locked && !c.access ? '<br>กลุ่มนี้มีรหัส ต้องใส่รหัสก่อนเข้า' : ''}${cur ? `<br>จะออกจากกลุ่ม “${esc(cur)}”` : ''}</p>
+      <p class="small muted" style="margin:4px 0 16px">${S.counts[c.name] || 0} คนออนไลน์${c.sub ? ' · ' + esc(c.sub) : ''}${c.locked && !c.access ? '<br>กลุ่มนี้มีรหัส ต้องใส่รหัสก่อนเข้า' : ''}${cur ? `<br>จะพูดเข้าห้องนี้ · ยังได้ยินห้อง “${esc(roomLabel(cur))}” ต่อ` : ''}</p>
       <div style="display:flex;gap:10px"><button class="btn" id="crNo" type="button">ยกเลิก</button><button class="btn primary" id="crYes" type="button">${icon('team')}เข้ากลุ่ม</button></div></div>`, () => {
     $('crNo').onclick = closeSheet;
     $('crYes').onclick = () => { closeSheet(); enterRoom(c.name, then, { confirmed: true }); };

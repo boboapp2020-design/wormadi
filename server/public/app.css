@@ -411,3 +411,9 @@ input.masked.show { -webkit-text-security: none; text-security: none; }
 .home-top .av { --ring:3px; --gap:2px; }
 .prof .bigav .av { --ring:5px; --gap:3px; box-shadow:0 6px 16px rgba(11,58,140,.35); }
 .prof .bigav .cam { z-index:2; }
+
+/* ---- room card = drop-down: a transparent <select> over the card opens the phone's own picker */
+.chcard { position:relative; cursor:pointer; }
+.chcard select.chsel { position:absolute; inset:0; width:100%; height:100%; opacity:0; border:0; cursor:pointer; font-size:16px; -webkit-appearance:none; appearance:none; }
+.chcard:has(select:disabled) { cursor:default; }
+.chcard:focus-within { outline:3px solid var(--focus, #ffb020); outline-offset:2px; }
