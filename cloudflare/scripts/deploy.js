@@ -60,15 +60,14 @@ const ask = q => new Promise(res => { const rl = readline.createInterface({ inpu
     console.log('  (เข้าสู่ระบบแล้วเปลี่ยนรหัสผ่านที่ ตั้งค่า > ข้อมูลส่วนตัว และเพิ่มพนักงานที่ ตั้งค่า > จัดการระบบ)');
   } else console.log(`✓ มีผู้ดูแลระบบแล้ว ${admins} คน`);
 
-  // 5) recordings (R2). If R2 is not enabled on the account, deploy without recording.
+  // 5) recordings: R2 if the account has it, otherwise compressed clips in D1 (both can be replayed).
   let config = CONFIG;
   try {
     const list = run(['r2', 'bucket', 'list']);
     if (!list.includes('walkie-recordings')) run(['r2', 'bucket', 'create', 'walkie-recordings']);
     console.log('✓ R2 bucket walkie-recordings พร้อม (บันทึกเสียงฟังย้อนหลังได้)');
   } catch (e) {
-    console.log('\n⚠️ บัญชีนี้ยังไม่ได้เปิด R2 จึงยังบันทึกเสียงไม่ได้ (อย่างอื่นใช้ได้ปกติ)');
-    console.log('   เปิดได้ที่ Cloudflare Dashboard > R2 Object Storage > Purchase/Enable R2 (มีโควตาฟรี 10 GB) แล้วรัน npm run deploy อีกครั้ง\n');
+    console.log('✓ ไม่ได้ใช้ R2: เสียงที่พูดเก็บแบบบีบอัดในฐานข้อมูล D1 แทน (ฟังย้อนหลังได้ตามปกติ)');
     config = path.join(root, '.wrangler', 'deploy-norec.jsonc');
     fs.mkdirSync(path.dirname(config), { recursive: true });
     const txt = fs.readFileSync(CONFIG, 'utf8').replace(/^\s*"r2_buckets".*$/m, '')
