@@ -452,7 +452,10 @@ public class WalkieService extends Service {
             }
             case "notification": {
                 JSONObject n = m.optJSONObject("notification");
-                if (n != null) postAlert(INFO_CHANNEL, n.optString("title"), n.optString("body"), false);
+                if (n != null) {
+                    boolean reminder = "reminder".equals(n.optString("kind"));   // บันทึก / เตือน: ring like an alarm
+                    postAlert(reminder ? ALERT_CHANNEL : INFO_CHANNEL, n.optString("title"), n.optString("body"), reminder);
+                }
                 break;
             }
             case "error":

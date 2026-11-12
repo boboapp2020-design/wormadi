@@ -24,7 +24,7 @@
   "r2_buckets": [{ "binding": "REC", "bucket_name": "walkie-recordings" }],
 
   // ลบ log เก่าทุกวัน ตี 3 เวลาไทย (20:00 UTC)
-  "triggers": { "crons": ["0 20 * * *"] },
+  "triggers": { "crons": ["0 20 * * *", "* * * * *"] },   // ลบข้อมูลเก่าตี 3 · เตือนบันทึกทุกนาที
 
   "vars": {
     "APP_NAME": "WORMADI",

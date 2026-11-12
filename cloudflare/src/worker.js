@@ -29,6 +29,7 @@ export default {
     // old link (*.workers.dev) -> main link without the account name; API keeps working for older Android installs
     if (env.PUBLIC_URL && url.hostname.endsWith('.workers.dev') && req.method === 'GET' && !url.pathname.startsWith('/api/'))
       return Response.redirect(env.PUBLIC_URL + url.pathname + url.search, 301);
+    if (url.pathname === '/__test/fire-reminders' && env.TEST_HOOKS === '1') return Response.json({ fired: await fireReminders(env) });
     if (url.pathname.startsWith('/api/')) {
       if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
       try { return await api(req, env, url); }
@@ -49,8 +50,10 @@ export default {
   },
 
   // ลบข้อมูลเก่าทุกวัน (cron ใน wrangler.jsonc)
-  async scheduled(_evt, env) {
+  async scheduled(evt, env) {
+    if (evt && evt.cron === '* * * * *') return fireReminders(env);
     const day = 86_400_000, now = Date.now();
+    await env.DB.prepare('DELETE FROM reminders WHERE done_at IS NOT NULL AND done_at < ?').bind(now - 30 * day).run();
     const cutoff = now - (Number(env.LOG_RETENTION_DAYS) || 90) * day;
     await env.DB.batch([
       env.DB.prepare('DELETE FROM walkie_log WHERE ts < ?').bind(cutoff),
@@ -104,6 +107,31 @@ async function deniedRooms(db, me) {
 }
 /** private call channel "dm:a:b": only users a and b */
 const dmBlocked = (ch, me) => { const m = /^dm:(\d+):(\d+)$/.exec(String(ch || '')); return !!m && ![Number(m[1]), Number(m[2])].includes(me.id); };
+// ---- reminders (บันทึก / เตือน)
+const RPT_MS = { daily: 86_400_000, shift: 8 * 3_600_000, weekly: 7 * 86_400_000 };
+async function fireReminders(env) {
+  const now = Date.now(), db = env.DB;
+  const { results } = await db.prepare(
+    `SELECT r.*, u.name AS owner FROM reminders r JOIN users u ON u.id = r.user_id
+     WHERE r.next_at IS NOT NULL AND r.next_at <= ? AND r.done_at IS NULL ORDER BY r.next_at LIMIT 200`).bind(now).all();
+  for (const r of results) {
+    let next = null;
+    if (RPT_MS[r.rpt]) { next = r.due_at || r.next_at; while (next <= now) next += RPT_MS[r.rpt]; }
+    await db.prepare('UPDATE reminders SET next_at = ?, due_at = COALESCE(?, due_at) WHERE id = ?').bind(next, next, r.id).run();
+    const rem = { id: r.id, title: r.title, note: r.note, due_at: r.next_at, rpt: r.rpt, channel: r.channel, owner: r.owner, owner_id: r.user_id, next_at: next };
+    const ins = await db.prepare('INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(now, r.user_id, 'reminder', '⏰ ' + r.title, r.note || 'ถึงเวลาที่ตั้งเตือนไว้', 'rem:' + r.id).run();
+    const n = { id: ins.meta.last_row_id, ts: now, kind: 'reminder', title: '⏰ ' + r.title, body: r.note || 'ถึงเวลาที่ตั้งเตือนไว้', ref: 'rem:' + r.id };
+    try {
+      await roomCall(env, '/broadcast', { msg: { type: 'notification', notification: n, reminder: rem }, userIds: [r.user_id] });
+      if (r.channel) {          // shared with a group: everyone in that group right now
+        const shared = { ...n, title: `⏰ ${r.title}`, body: `จาก ${r.owner}${r.note ? ' · ' + r.note : ''}` };
+        await roomCall(env, '/broadcast', { msg: { type: 'notification', notification: shared, reminder: { ...rem, shared: true } }, channel: r.channel });
+      }
+    } catch (e) { console.error('reminder broadcast failed', e); }
+  }
+  return results.length;
+}
 async function deleteChannel(db, cid) {
   await db.batch([
     db.prepare('DELETE FROM channel_access WHERE channel_id = ?').bind(cid),
@@ -196,7 +224,7 @@ async function api(req, env, url) {
   if (p === '/api/me' && m === 'GET') {
     const lr = (await db.prepare('SELECT last_read FROM notif_reads WHERE user_id = ?').bind(me.id).first('last_read')) || 0;
     const unread = await db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE (user_id IS NULL OR user_id = ?) AND ts > ?').bind(me.id, lr).first('n');
-    const tasks = await db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE assignee_id = ? AND done_at IS NULL').bind(me.id).first('n');
+    const tasks = await db.prepare('SELECT COUNT(*) AS n FROM reminders WHERE user_id = ? AND done_at IS NULL AND next_at IS NOT NULL AND next_at < ?').bind(me.id, Date.now() + 86_400_000).first('n');
     const ch = me.main_channel ? await db.prepare('SELECT name FROM channels WHERE id = ?').bind(me.main_channel).first('name') : null;
     return json({ user: { ...me, main_channel_name: ch }, unread, openTasks: tasks });
   }
@@ -269,6 +297,50 @@ async function api(req, env, url) {
     if (!roleAtLeast(me.role, 'admin') && c.created_by !== me.id) return fail(403, 'ลบได้เฉพาะห้องที่คุณสร้าง');
     await deleteChannel(db, id);
     await roomCall(env, '/reload');
+    return json({ ok: true });
+  }
+
+  // ---------------------------------------------------------------- บันทึก / เตือน (only the owner sees them)
+  if (p === '/api/reminders' && m === 'GET') {
+    const { results } = await db.prepare(
+      `SELECT id, title, note, due_at, next_at, rpt, channel, done_at, created_at FROM reminders WHERE user_id = ?
+       ORDER BY done_at IS NOT NULL, next_at IS NULL, COALESCE(next_at, due_at, created_at) LIMIT 300`).bind(me.id).all();
+    return json(results);
+  }
+  if (seg[1] === 'reminders' && (m === 'POST' || m === 'PATCH')) {
+    const b = await readJson(req);
+    const cur = m === 'PATCH' ? await db.prepare('SELECT * FROM reminders WHERE id = ? AND user_id = ?').bind(id, me.id).first() : null;
+    if (m === 'PATCH' && !cur) return fail(404, 'ไม่พบบันทึกนี้');
+    const now = Date.now();
+    if (m === 'PATCH' && b.snooze_min) {               // snooze: ring again in N minutes
+      await db.prepare('UPDATE reminders SET next_at = ? WHERE id = ?').bind(now + Math.min(Math.max(Number(b.snooze_min) || 10, 1), 240) * 60000, id).run();
+      return json({ ok: true });
+    }
+    if (m === 'PATCH' && 'done' in b && Object.keys(b).length === 1) {   // tick done / undo
+      if (b.done) await db.prepare(`UPDATE reminders SET done_at = ?, next_at = CASE WHEN rpt = 'none' THEN NULL ELSE next_at END WHERE id = ?`).bind(now, id).run();
+      else await db.prepare('UPDATE reminders SET done_at = NULL, next_at = CASE WHEN due_at > ? THEN due_at ELSE next_at END WHERE id = ?').bind(now, id).run();
+      return json({ ok: true });
+    }
+    const title = str(b.title, 120);
+    if (!title) return fail(400, 'กรุณาใส่หัวข้อ');
+    const rpt = ['none', 'daily', 'shift', 'weekly'].includes(b.rpt) ? b.rpt : 'none';
+    const due = Number.isFinite(Number(b.due_at)) && Number(b.due_at) > 0 ? Number(b.due_at) : null;
+    let next = due;
+    if (due && RPT_MS[rpt]) while (next <= now - 60000) next += RPT_MS[rpt];
+    let channel = str(b.channel, 40) || null;
+    if (channel && (dmBlocked(channel, me) || (await deniedRooms(db, me)).has(channel) ||
+        !(await db.prepare('SELECT 1 AS x FROM channels WHERE name = ? AND active = 1').bind(channel).first('x')))) channel = null;
+    if (m === 'POST') {
+      const r = await db.prepare('INSERT INTO reminders (user_id, title, note, due_at, next_at, rpt, channel, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(me.id, title, str(b.note, 500), next, next, rpt, channel, now).run();
+      return json({ ok: true, id: r.meta.last_row_id });
+    }
+    await db.prepare('UPDATE reminders SET title = ?, note = ?, due_at = ?, next_at = ?, rpt = ?, channel = ?, done_at = NULL WHERE id = ?')
+      .bind(title, str(b.note, 500), next, next, rpt, channel, id).run();
+    return json({ ok: true });
+  }
+  if (seg[1] === 'reminders' && id && m === 'DELETE') {
+    await db.prepare('DELETE FROM reminders WHERE id = ? AND user_id = ?').bind(id, me.id).run();
     return json({ ok: true });
   }
 

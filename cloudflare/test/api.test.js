@@ -349,6 +349,35 @@ test('เชิญเข้ากลุ่ม: เชิญจากโปรไ
   await call('DELETE', '/api/channels/' + room.body.id, T['แชทA']);
 });
 
+test('บันทึก / เตือน: ส่วนตัว, ถึงเวลาเครื่องดัง, ทำซ้ำทุกวัน, เลื่อน 10 นาที, แชร์ให้กลุ่ม', async () => {
+  const fire = async () => (await fetch(base + '/__test/fire-reminders')).json();
+  const a = await client(T['แชทA'], 'ช่อง 2 - ฝ่ายผลิต'), b = await client(T['แชทB'], 'ช่อง 2 - ฝ่ายผลิต');
+  const soon = Date.now() + 800;
+  const one = await call('POST', '/api/reminders', T['แชทA'], { title: 'เช็คแรงดัน', note: 'ไม่เกิน 30 บาร์', due_at: soon, rpt: 'none' });
+  assert.equal(one.status, 200, JSON.stringify(one.body));
+  const daily = await call('POST', '/api/reminders', T['แชทA'], { title: 'ส่งรายงานกะ', due_at: soon, rpt: 'daily', channel: 'ช่อง 2 - ฝ่ายผลิต' });
+  assert.equal((await call('POST', '/api/reminders', T['แชทA'], { title: '' })).status, 400);
+  assert.ok(!(await call('GET', '/api/reminders', T['แชทB'])).body.some(x => x.title === 'เช็คแรงดัน'), 'คนอื่นไม่เห็นบันทึกของเรา');
+  await sleep(1000);
+  assert.ok((await fire()).fired >= 2);
+  const got = [await a.wait('notification'), await a.wait('notification')];
+  const mine = got.find(g => g.reminder && g.reminder.id === one.body.id);
+  assert.ok(mine, 'เจ้าของได้รับการเตือน'); assert.equal(mine.notification.kind, 'reminder');
+  const shared = await b.wait('notification');
+  assert.equal(shared.reminder.shared, true, 'คนในกลุ่มได้รับเตือนด้วย');
+  const list = (await call('GET', '/api/reminders', T['แชทA'])).body;
+  assert.equal(list.find(x => x.id === one.body.id).next_at, null, 'ครั้งเดียว: ไม่เตือนซ้ำ');
+  assert.ok(list.find(x => x.id === daily.body.id).next_at > Date.now() + 23 * 3600000, 'ทุกวัน: เลื่อนไปพรุ่งนี้');
+  assert.equal((await fire()).fired, 0, 'ไม่เตือนซ้ำในนาทีเดียวกัน');
+  assert.equal((await call('PATCH', `/api/reminders/${one.body.id}`, T['แชทA'], { snooze_min: 10 })).status, 200);
+  const sn = (await call('GET', '/api/reminders', T['แชทA'])).body.find(x => x.id === one.body.id);
+  assert.ok(sn.next_at > Date.now() + 9 * 60000, 'เลื่อน 10 นาที');
+  assert.equal((await call('PATCH', `/api/reminders/${one.body.id}`, T['แชทB'], { done: true })).status, 404, 'แก้ของคนอื่นไม่ได้');
+  assert.equal((await call('PATCH', `/api/reminders/${one.body.id}`, T['แชทA'], { done: true })).status, 200);
+  assert.equal((await call('DELETE', `/api/reminders/${daily.body.id}`, T['แชทA'])).status, 200);
+  a.close(); b.close();
+});
+
 (async () => {
   let fail = 0;
   for (const [n, f] of tests) {

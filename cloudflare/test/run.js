@@ -32,7 +32,7 @@ if (NOREC) {
   fs.writeFileSync(path.join(root, '.wrangler', 'test-norec.jsonc'), cfg);
 }
 const dev = spawn(process.execPath, [W, 'dev', '--port', String(PORT), '--ip', '127.0.0.1', '--inspector-port', '0', '--persist-to', STATE,
-  ...(NOREC ? ['--config', path.join(root, '.wrangler', 'test-norec.jsonc')] : []), '--var', 'MAX_TALK_MS:500', '--show-interactive-dev-session=false'], { cwd: root, stdio: 'ignore' });
+  ...(NOREC ? ['--config', path.join(root, '.wrangler', 'test-norec.jsonc')] : []), '--var', 'MAX_TALK_MS:500', '--var', 'TEST_HOOKS:1', '--show-interactive-dev-session=false'], { cwd: root, stdio: 'ignore' });
 const stop = code => { try { process.platform === 'win32' ? execFileSync('taskkill', ['/pid', String(dev.pid), '/T', '/F'], { stdio: 'ignore' }) : dev.kill(); } catch {} process.exit(code); };
 
 (async () => {

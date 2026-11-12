@@ -352,6 +352,7 @@ function onMessage(m) {
     case 'react': S.chat.reactions[m.id] = m.by; const el = $('r-' + m.id); if (el) el.innerHTML = reactsHtml(m.id); break;
     case 'notification':
       S.unread++; renderBadges();
+      if (m.reminder) { showReminder(m.reminder, m.notification); break; }
       toast(m.notification.title);
       if (m.notification.kind === 'task') { S.openTasks++; if (S.route === 'tasks') render(); }
       if (document.hidden) systemNotify(m.notification.title, m.notification.body, 'n');
@@ -808,7 +809,7 @@ ROUTES.home = () => {
       <button class="tile grp" data-to="channels">${icon('team')}กลุ่มสื่อสาร</button>
       <button class="tile tmsg" data-to="convos">${icon('chat')}ข้อความ<span class="badge hidden" id="msgTileBadge"></span></button>
       <button class="tile sos" data-to="sos">${icon('siren')}แจ้งเหตุฉุกเฉิน<small>(SOS)</small></button>
-      <button class="tile ttask" data-to="tasks">${icon('task')}งานของฉัน<span class="badge hidden" id="taskBadge"></span></button>
+      <button class="tile ttask" data-to="tasks">${icon('task')}บันทึก / เตือน<span class="badge hidden" id="taskBadge"></span></button>
       <button class="tile map" data-to="map">${icon('map')}แผนที่โรงงาน</button>
     </div>
     <button class="card online-card" style="width:calc(100% - 28px);text-align:left" data-to="members">
@@ -1351,65 +1352,106 @@ function pickImage(maxSide, cb, quality = 0.85, opts = {}) {
   inp.click();
 }
 
-// ---------------------------------------------------------------- 10 my tasks
+// ---------------------------------------------------------------- 10 บันทึก / เตือน (personal notes + timed reminders)
+const RPT_NAME = { none: 'ครั้งเดียว', daily: 'ทุกวัน', shift: 'ทุกกะ (8 ชม.)', weekly: 'ทุกสัปดาห์' };
+const pad2 = n => String(n).padStart(2, '0');
+const toLocalInput = ts => { const d = new Date(ts); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+function whenText(ts) {
+  if (!ts) return '';
+  const d = new Date(ts), today = new Date(); today.setHours(0, 0, 0, 0);
+  const day = Math.round((new Date(d).setHours(0, 0, 0, 0) - today) / 86_400_000);
+  const dayTxt = day === 0 ? 'วันนี้' : day === 1 ? 'พรุ่งนี้' : day === -1 ? 'เมื่อวาน' : fmtDate(ts);
+  return `${dayTxt} ${fmtTime(ts)} น.`;
+}
 ROUTES.tasks = async p => {
-  const tab = p.tab || 'today', lead = S.user && ['lead', 'admin'].includes(S.user.role);
-  mount(`<div class="page">${header('งานของฉัน')}
-    <div class="tabs"><button data-t="today" class="${tab === 'today' ? 'on' : ''}">วันนี้ <span id="tc"></span></button><button data-t="all" class="${tab === 'all' ? 'on' : ''}">ทั้งหมด</button>${lead ? `<button data-t="assigned" class="${tab === 'assigned' ? 'on' : ''}">ที่มอบหมาย</button>` : ''}</div>
-    <div class="scroll" id="tl" style="padding-bottom:${lead ? 90 : 10}px"><div class="empty">กำลังโหลด…</div></div>
-    ${lead ? `<button class="btn primary fab" id="newTask">${icon('plus')}มอบหมายงาน</button>` : ''}</div>`, root => {
+  const tab = p.tab || 'up';
+  mount(`<div class="page">${header('บันทึก / เตือน', '', `<button class="ib" id="newNote" aria-label="บันทึกใหม่">${icon('plus')}</button>`)}
+    <div class="tabs"><button data-t="up" class="${tab === 'up' ? 'on' : ''}">ที่จะเตือน</button><button data-t="all" class="${tab === 'all' ? 'on' : ''}">ทั้งหมด</button><button data-t="done" class="${tab === 'done' ? 'on' : ''}">เสร็จแล้ว</button></div>
+    <div class="scroll"><div style="padding:6px 14px 0"><button class="btn primary" id="newNote2" type="button">${icon('plus')}บันทึกใหม่ / ตั้งเตือน</button></div>
+    <div class="list" id="rl"><div class="empty">กำลังโหลด…</div></div>
+    <p class="small muted" style="padding:0 18px 18px">บันทึกเห็นได้เฉพาะคุณ · ถึงเวลาเครื่องจะดังและสั่น (เปิด "ได้ยินเสียงเมื่อพับ / ปิดแอป" ไว้ หรือใช้แอป Android เพื่อให้ดังแม้ปิดแอป)</p></div></div>`, root => {
     bindBack(root);
-    for (const b of $$('[data-t]', root)) b.onclick = () => go('tasks', { tab: b.dataset.t }, true);
-    if (lead) $('newTask').onclick = taskForm;
+    for (const x of $$('[data-t]', root)) x.onclick = () => go('tasks', { tab: x.dataset.t }, true);
+    $('newNote').onclick = $('newNote2').onclick = () => noteSheet();
   });
   let rows = [];
-  try { rows = await api(`/api/tasks?scope=${tab}&dayStart=${new Date().setHours(0, 0, 0, 0)}`); } catch (e) { $('tl') && ($('tl').innerHTML = `<div class="empty">${esc(e.message)}</div>`); return; }
-  if (!$('tl')) return;
-  if (tab === 'today') $('tc').textContent = rows.filter(t => !t.done_at).length || '';
-  $('tl').innerHTML = rows.length ? rows.map(t => {
-    const late = !t.done_at && t.due_at && t.due_at < Date.now();
-    const due = t.done_at ? `เสร็จแล้ว ${fmtTime(t.done_at)} น.` : t.due_at ? `${late ? 'เลยกำหนด · ' : ''}ก่อน ${fmtTime(t.due_at)} น.${new Date(t.due_at).toDateString() !== new Date().toDateString() ? ' ' + fmtDate(t.due_at) : ''}` : 'ไม่กำหนดเวลา';
-    const who = tab === 'assigned' ? `ผู้รับ: ${esc(t.assignee_name)}` : `มอบโดย ${esc(t.creator_name)}`;
-    return `<label class="task ${t.done_at ? 'done' : ''}"><input type="checkbox" data-task="${t.id}" ${t.done_at ? 'checked' : ''} aria-label="${esc(t.title)} เสร็จแล้ว">
-      <div class="grow"><div class="t1">${esc(t.title)}</div>${t.detail ? `<div class="small muted">${esc(t.detail)}</div>` : ''}<div class="due">${due}</div><div class="small muted">${who}</div></div>
-      ${tab === 'assigned' ? `<button class="ib" data-del="${t.id}" aria-label="ลบงาน" style="color:var(--err-fg)">${icon('trash')}</button>` : ''}</label>`;
-  }).join('') : `<div class="empty">${tab === 'assigned' ? 'ยังไม่ได้มอบหมายงาน' : 'ไม่มีงานค้าง 🎉'}</div>`;
-  for (const c of $$('[data-task]')) c.onchange = async () => {
-    try { await api(`/api/tasks/${c.dataset.task}`, { method: 'PATCH', body: { done: c.checked } }); S.openTasks += c.checked ? -1 : 1; renderBadges(); render(); } catch (e) { toast(e.message); c.checked = !c.checked; }
+  try { rows = await api('/api/reminders'); } catch (e) { if ($('rl')) $('rl').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!$('rl') || S.route !== 'tasks') return;
+  S.notes = rows;
+  const list = rows.filter(r => tab === 'all' ? true : tab === 'done' ? !!r.done_at : !r.done_at);
+  $('rl').innerHTML = list.length ? list.map(r => `<div class="li" data-r="${r.id}" role="button" tabindex="0">
+      <input type="checkbox" class="chk" data-done="${r.id}" ${r.done_at ? 'checked' : ''} aria-label="ทำเสร็จแล้ว" style="width:24px;height:24px;flex:none">
+      <div class="grow"><div class="t1 ell" style="${r.done_at ? 'text-decoration:line-through;opacity:.6' : ''}">${esc(r.title)}</div>
+        <div class="t2 ell">${r.next_at ? `${icon('bell')} ${whenText(r.next_at)}` : r.due_at ? whenText(r.due_at) : 'ไม่ได้ตั้งเตือน'}${r.rpt !== 'none' ? ' · ' + RPT_NAME[r.rpt] : ''}${r.channel ? ' · กลุ่ม ' + esc(r.channel) : ''}${r.note ? ' · ' + esc(r.note) : ''}</div></div>
+      <span class="chev">${icon('chev')}</span></div>`).join('')
+    : `<div class="empty">${tab === 'done' ? 'ยังไม่มีรายการที่เสร็จ' : 'ยังไม่มีบันทึก กด “บันทึกใหม่ / ตั้งเตือน”'}</div>`;
+  for (const c of $$('[data-done]')) c.onclick = async e => {
+    e.stopPropagation();
+    try { await api(`/api/reminders/${c.dataset.done}`, { method: 'PATCH', body: { done: c.checked } }); refreshMe(); render(); } catch (er) { toast(er.message); }
   };
-  for (const d of $$('[data-del]')) d.onclick = async e => { e.preventDefault(); if (!confirm('ลบงานนี้?')) return; try { await api(`/api/tasks/${d.dataset.del}`, { method: 'DELETE' }); render(); } catch (er) { toast(er.message); } };
+  for (const r of $$('[data-r]')) r.onclick = e => { if (!e.target.closest('[data-done]')) noteSheet(rows.find(x => x.id === Number(r.dataset.r))); };
 };
-async function taskForm() {
-  let users = [];
-  try { users = await api('/api/users'); } catch {}
-  const now = new Date(Date.now() + 2 * 3600e3); now.setMinutes(0, 0, 0);
-  const local = new Date(now - now.getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
-  sheet(`<h3>มอบหมายงาน</h3>
-    <label class="lbl">ชื่องาน</label><div class="field plain"><input id="tt" maxlength="120" placeholder="เช่น ตรวจสอบอุณหภูมิ Boiler"></div>
-    <label class="lbl">รายละเอียด</label><div class="field plain"><textarea id="td" maxlength="500"></textarea></div>
-    <label class="lbl">ทำให้เสร็จก่อน</label><div class="field plain"><input id="tdue" type="datetime-local" value="${local}"></div>
-    <label class="lbl">มอบให้ทั้งช่อง (ทุกคนที่มีช่องนี้เป็นช่องหลัก)</label><div class="field plain"><select id="tch"><option value="">— ไม่ใช้ —</option>${S.channels.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
-    <label class="lbl">หรือเลือกเป็นรายคน</label><div class="search" style="margin:12px 0 6px">${icon('search')}<input id="tq" placeholder="ค้นหาชื่อ..."></div>
-    <div class="list" id="tus" style="margin:0 0 12px;max-height:220px;overflow:auto"></div>
-    <div class="err" id="terr"></div><button class="btn primary" id="tsave">มอบหมายงาน</button>`, bg => {
-    const picked = new Set();
-    const draw = () => {
-      const q = $('tq').value.trim().toLowerCase();
-      $('tus').innerHTML = users.filter(u => !q || `${u.name} ${u.dept}`.toLowerCase().includes(q)).map(u => `<label class="li"><input type="checkbox" data-u="${u.id}" ${picked.has(u.id) ? 'checked' : ''} style="width:22px;height:22px">${avatar(u)}<div class="grow"><div class="t1 ell">${esc(u.name)}</div><div class="t2">${esc(u.dept)}</div></div></label>`).join('');
-      for (const c of $$('[data-u]', bg)) c.onchange = () => c.checked ? picked.add(Number(c.dataset.u)) : picked.delete(Number(c.dataset.u));
-      loadAvatars($('tus'));
-    };
-    $('tq').oninput = draw; draw();
-    $('tsave').onclick = async () => {
-      const title = $('tt').value.trim();
-      if (!title) return ($('terr').textContent = 'กรุณาใส่ชื่องาน');
-      if (!picked.size && !$('tch').value) return ($('terr').textContent = 'กรุณาเลือกผู้รับงาน');
+function noteSheet(n) {
+  const edit = !!n;
+  const when = n && (n.next_at || n.due_at) ? n.next_at || n.due_at : Math.ceil((Date.now() + 3_600_000) / 300_000) * 300_000;
+  const rooms = S.channels.filter(c => c.access !== false);
+  sheet(`<h3>${edit ? 'แก้ไขบันทึก' : 'บันทึกใหม่'}</h3><form id="nf" novalidate>
+    <label class="lbl" for="nt">หัวข้อ</label><div class="field plain"><input id="nt" maxlength="120" placeholder="เช่น เช็คแรงดันหม้อไอน้ำ" value="${esc(n?.title || '')}"></div>
+    <label class="lbl" for="nn">รายละเอียด (ไม่ใส่ก็ได้)</label><div class="field plain"><input id="nn" maxlength="500" placeholder="เช่น ต้องไม่เกิน 30 บาร์" value="${esc(n?.note || '')}"></div>
+    <label class="setrow" style="padding:14px 2px;border:0">${icon('bell', 'i lead')}<div class="grow"><b>เตือนเมื่อถึงเวลา</b><small>เครื่องจะดังและสั่น</small></div><input type="checkbox" class="sw" id="nr" ${!edit || n.next_at || n.due_at ? 'checked' : ''}></label>
+    <div id="nwhen">
+      <label class="lbl" for="nd">วันและเวลา</label><div class="field plain"><input id="nd" type="datetime-local" value="${toLocalInput(when)}"></div>
+      <label class="lbl" for="np">ทำซ้ำ</label><div class="field plain"><select id="np">${Object.entries(RPT_NAME).map(([k, v]) => `<option value="${k}" ${(n?.rpt || 'none') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <label class="lbl" for="nc">เตือนคนในกลุ่มด้วย (ไม่บังคับ)</label><div class="field plain"><select id="nc"><option value="">— เฉพาะฉัน —</option>${rooms.map(c => `<option value="${esc(c.name)}" ${n?.channel === c.name ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
+    </div>
+    <div class="err" id="nerr" role="alert"></div>
+    <button class="btn primary" id="nsave">${icon('check')}บันทึก</button>
+    ${edit ? `<button class="btn" type="button" id="ndel" style="margin-top:10px;color:var(--err-fg)">${icon('trash')}ลบบันทึกนี้</button>` : ''}</form>`, () => {
+    const sync = () => $('nwhen').classList.toggle('hidden', !$('nr').checked);
+    $('nr').onchange = sync; sync();
+    $('nf').onsubmit = async e => {
+      e.preventDefault();
+      const title = $('nt').value.trim(), err = $('nerr');
+      if (!title) return (err.textContent = 'กรุณาใส่หัวข้อ');
+      const remind = $('nr').checked, due = remind ? new Date($('nd').value).getTime() : null;
+      if (remind && !Number.isFinite(due)) return (err.textContent = 'กรุณาเลือกวันและเวลา');
+      if (remind && $('np').value === 'none' && due < Date.now() - 60000) return (err.textContent = 'เวลาที่เลือกผ่านไปแล้ว');
+      $('nsave').disabled = true;
+      const body = { title, note: $('nn').value.trim(), due_at: due, rpt: remind ? $('np').value : 'none', channel: remind ? $('nc').value : '' };
       try {
-        const r = await api('/api/tasks', { method: 'POST', body: { title, detail: $('td').value.trim(), due_at: $('tdue').value ? new Date($('tdue').value).getTime() : null, assignee_ids: [...picked], channel_id: Number($('tch').value) || null } });
-        closeSheet(); toast(`มอบหมายงานให้ ${r.count} คนแล้ว`); go('tasks', { tab: 'assigned' }, true);
-      } catch (e) { $('terr').textContent = e.message; }
+        await api(edit ? `/api/reminders/${n.id}` : '/api/reminders', { method: edit ? 'PATCH' : 'POST', body });
+        closeSheet(); toast(remind ? `ตั้งเตือนแล้ว: ${whenText(due)}` : 'บันทึกแล้ว'); refreshMe();
+        if (S.route === 'tasks') render(); else go('tasks');
+      } catch (er) { err.textContent = er.message; $('nsave').disabled = false; }
     };
+    const d = $('ndel');
+    if (d) d.onclick = async () => { if (!confirm('ลบบันทึกนี้?')) return; try { await api(`/api/reminders/${n.id}`, { method: 'DELETE' }); closeSheet(); refreshMe(); render(); } catch (er) { toast(er.message); } };
   });
+}
+// the alarm when a reminder is due
+let remRing = null, remStop = null;
+function stopRemRing() { clearInterval(remRing); clearTimeout(remStop); remRing = remStop = null; }
+function showReminder(r, n) {
+  stopRemRing();
+  const mine = !r.shared && S.user && r.owner_id === S.user.id;
+  sheet(`<div id="remAlarm" style="text-align:center">
+      <div style="font-size:56px;line-height:1">⏰</div>
+      <h2 style="margin:8px 0 4px">${esc(r.title)}</h2>
+      ${r.note ? `<p style="margin:4px 0">${esc(r.note)}</p>` : ''}
+      <p class="small muted" style="margin:6px 0 16px">${fmtTime(r.due_at || Date.now())} น.${r.rpt && r.rpt !== 'none' ? ' · ' + RPT_NAME[r.rpt] : ''}${r.shared ? ` · จาก ${esc(r.owner)}${r.channel ? ' (กลุ่ม ' + esc(r.channel) + ')' : ''}` : ''}</p>
+      ${mine ? `<div style="display:flex;gap:10px"><button class="btn" id="remSnooze" type="button">เลื่อน 10 นาที</button><button class="btn primary" id="remDone" type="button">${icon('check')}${r.rpt && r.rpt !== 'none' ? 'รับทราบ' : 'เสร็จแล้ว'}</button></div>`
+        : `<button class="btn primary" id="remOk" type="button">${icon('check')}รับทราบ</button>`}
+    </div>`, () => {
+    const close = () => { stopRemRing(); closeSheet(); if (S.route === 'tasks') render(); };
+    if ($('remOk')) $('remOk').onclick = close;
+    if ($('remSnooze')) $('remSnooze').onclick = async () => { try { await api(`/api/reminders/${r.id}`, { method: 'PATCH', body: { snooze_min: 10 } }); toast('จะเตือนอีกครั้งใน 10 นาที'); } catch (e) { toast(e.message); } close(); };
+    if ($('remDone')) $('remDone').onclick = async () => { if (!r.rpt || r.rpt === 'none') { try { await api(`/api/reminders/${r.id}`, { method: 'PATCH', body: { done: true } }); } catch {} } close(); refreshMe(); };
+  });
+  ensureCtx();
+  const ring = () => { if (!NATIVE) { beep(988, 0.12); setTimeout(() => beep(1319, 0.12), 160); setTimeout(() => beep(988, 0.12), 320); } vibrate([400, 200, 400]); };
+  ring(); remRing = setInterval(ring, 2000);
+  remStop = setTimeout(stopRemRing, 60000);
+  if (document.hidden) systemNotify(n?.title || '⏰ ' + r.title, n?.body || r.note || 'ถึงเวลาที่ตั้งเตือนไว้', 'rem', true);
 }
 
 // ---------------------------------------------------------------- 11 SOS
@@ -1485,7 +1527,7 @@ ROUTES.notifications = async p => {
   });
   let server = [];
   if (ACC()) { try { server = await api('/api/notifications'); } catch {} }
-  const KIND = { invite: ['team', '#1d63d6'], sos: ['siren', '#cf2020'], task: ['task', '#6d3fd8'], system: ['info', '#1d63d6'], msg: ['chat', '#178a44'], talk: ['mic', '#0b7f80'] };
+  const KIND = { reminder: ['bell', '#c27c00'], invite: ['team', '#1d63d6'], sos: ['siren', '#cf2020'], task: ['task', '#6d3fd8'], system: ['info', '#1d63d6'], msg: ['chat', '#178a44'], talk: ['mic', '#0b7f80'] };
   const items = [
     ...server.map(n => ({ ts: n.ts, kind: n.kind, title: n.title, body: n.body, read: n.read, ref: n.ref })),
     ...S.msgAlerts.map(a => ({ ts: a.ts, kind: a.kind === 'talk' ? 'talk' : 'msg', title: `${a.channel}`, body: `${a.name}: ${a.kind === 'talk' ? 'พูด ' + fmtDur(a.ms) : a.text}`, read: a.read, ch: a.channel })),
@@ -1497,6 +1539,7 @@ ROUTES.notifications = async p => {
   for (const b of $$('[data-i]', $('nl'))) b.onclick = () => {
     const n = items[Number(b.dataset.i)];
     if (n.ch) openChatFor(n.ch); else if (n.kind === 'sos') go('sos'); else if (n.kind === 'task') go('tasks');
+    else if (n.kind === 'reminder') go('tasks');
     else if (n.kind === 'invite' && String(n.ref || '').startsWith('room:')) loadChannels().then(() => enterRoom(String(n.ref).slice(5), 'ptt'));
   };
   if (ACC()) { api('/api/notifications/read', { method: 'POST' }).then(() => { S.unread = 0; renderBadges(); }).catch(() => {}); }

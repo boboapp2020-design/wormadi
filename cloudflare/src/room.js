@@ -84,10 +84,13 @@ export class WalkieRoom extends DurableObject {
       return Response.json({ kicked: n });
     }
     if (url.pathname === '/broadcast') {        // SOS, task assigned, notification
-      const { msg, userIds } = await req.json();
+      const { msg, userIds, channel } = await req.json();
       const only = Array.isArray(userIds) ? new Set(userIds.map(Number)) : null;
       let n = 0;
-      for (const ws of this.authed()) { if (!only || only.has(this.info(ws).uid)) { this.send(ws, msg); n++; } }
+      for (const ws of this.authed()) {
+        const c = this.info(ws);
+        if ((only && only.has(c.uid)) || (channel && c.channel === channel) || (!only && !channel)) { this.send(ws, msg); n++; }
+      }
       return Response.json({ delivered: n });
     }
     if ((req.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') return new Response('expected websocket', { status: 426 });
