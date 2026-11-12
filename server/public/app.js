@@ -147,6 +147,11 @@ function orgLogo(cls = 'orglogo') {
   return `<img class="${cls}" src="brand/logo.png" alt="" onerror="this.remove()">`;
 }
 
+// ---- secret fields: shown as dots, but invisible to password managers / autofill (shared factory phones)
+const MASK_OK = typeof CSS !== 'undefined' && CSS.supports && (CSS.supports('-webkit-text-security', 'disc') || CSS.supports('text-security', 'disc'));
+const secretAttrs = (ph, extra = '') => `${MASK_OK ? 'type="text" class="masked"' : 'type="password"'} placeholder="${ph}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other" ${extra}`;
+function toggleSecret(inp) { if (MASK_OK) inp.classList.toggle('show'); else inp.type = inp.type === 'password' ? 'text' : 'password'; return MASK_OK ? inp.classList.contains('show') : inp.type === 'text'; }
+
 // ================================================================ API
 async function api(path, { method = 'GET', body, raw } = {}) {
   const headers = {};
@@ -270,6 +275,11 @@ function stopConnection() {
 }
 const send = m => ws && ws.readyState === 1 && ws.send(JSON.stringify(m));
 function sendMsg(m) { if (NATIVE) WN.send({ msg: m }); else send(m); }
+/** join exactly this channel ('' = no group) without the saved-room fallback */
+function joinRaw(ch) {
+  if (NATIVE) return WN.switchChannel({ channel: ch });
+  sendMsg({ type: 'join', token: S.token || undefined, name: S.profile.name, dept: S.profile.dept, uid: S.uid, channel: ch });
+}
 function joinNow(channel) {
   const ch = channel || (S.call && S.call.status === 'active' ? S.call.channel : '') || lsGet('walkie_channel') || '';
   if (NATIVE) return WN.switchChannel({ channel: ch });
@@ -277,17 +287,14 @@ function joinNow(channel) {
 }
 window.addEventListener('online', () => { if (!stopped && !NATIVE && (!ws || ws.readyState > 1)) { attempt = 0; connect(); } });
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && !keepOn() && S.me && !S.call) {
-    // the user turned background listening off: leave the room while the app is not on screen
-    S.pausedBg = true; stopTalking(true); stopConnection();
-    return;
-  }
-  if (!document.hidden && S.pausedBg) { S.pausedBg = false; if (ACC() ? S.token : S.profile.name) startConnection(); }
   if (document.hidden) {
-    // app minimised / screen off: keep the connection and speaker running
-    if (!NATIVE && S.me && keepOn()) { if (!keepAudio) setKeepAlive(true, true); else keepAudio.play().catch(() => {}); if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {}); }
+    // app minimised / screen off: stay connected while signed in, so SOS always rings (only logging out stops it)
+    if (!NATIVE && S.me) { if (!keepAudio) setKeepAlive(true, true); else keepAudio.play().catch(() => {}); if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {}); }
+    // "ได้ยินเสียงคุย…" switched off: step out of the group (no voice) but keep the connection for SOS
+    if (!keepOn() && S.me && S.me.channel && !isDm(S.me.channel)) { S.pausedRoom = S.me.channel; stopTalking(true); joinRaw(''); }
     return;
   }
+  if (S.pausedRoom) { const r = S.pausedRoom; S.pausedRoom = null; joinRaw(r); }
   if (!NATIVE && !stopped && (!ws || ws.readyState > 1)) { attempt = 0; connect(); }
   if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().finally(renderUnlock);
   if (wakeOn()) setWake(true);
@@ -313,7 +320,7 @@ function onMessage(m) {
       if (changed) { S.chat.loadedFor = null; if (S.route === 'chat') renderChat(); }
       if (m.channel) markChannelRead(m.channel);
       if (S.route === 'ptt' || S.route === 'home') render();
-      if (keepOn() && !keepAudio && !NATIVE) setKeepAlive(true, true);
+      if (!keepAudio && !NATIVE) setKeepAlive(true, true);          // keeps the page alive in the background (SOS)
       if (!NATIVE && wakeOn()) setWake(true);
       renderUnlock();
       break;
@@ -360,6 +367,13 @@ function onMessage(m) {
     case 'sos': showSos(m.sos); break;
     case 'call': incomingCall(m); break;
     case 'invite': incomingInvite(m); break;
+    case 'kicked':
+      if (lsGet('walkie_channel') === m.channel) lsSet('walkie_channel', '');
+      if (S.me) S.me.channel = null;
+      toast(`${m.by} นำคุณออกจากกลุ่ม “${m.channel}”`);
+      if (['ptt', 'chat'].includes(S.route)) go('home', {}, true); else render();
+      break;
+    case 'kick_done': toast(`นำ ${m.name || 'สมาชิก'} ออกจากกลุ่มแล้ว`); break;
     case 'invite_sent': toast(m.online ? `ส่งคำเชิญเข้ากลุ่ม "${m.channel}" แล้ว` : `ส่งคำเชิญแล้ว จะเห็นเมื่อเข้าแอป`); break;
     case 'call_ringing': toast(`กำลังเรียก ${S.call?.peer?.name || ''}…`); break;
     case 'call_fail': toast(m.message || 'เรียกไม่สำเร็จ'); endCall(); break;
@@ -375,7 +389,7 @@ function onMessage(m) {
     case 'error':
       if (m.code === 'auth') { stopConnection(); signOut('ออกจากระบบแล้ว: บัญชีนี้เข้าสู่ระบบจากเครื่องอื่น หรือหมดเวลา กรุณาเข้าสู่ระบบใหม่'); }
       if (m.code === 'replaced') { stopConnection(); signOut(m.message); }
-      if (m.code === 'invite') toast(m.message);
+      if (m.code === 'invite' || m.code === 'kick' || m.code === 'banned') toast(m.message);
       if (m.code === 'must_change') { stopConnection(); if (S.user) S.user.must_change = 1; go('setpw', {}, true); }
       if (m.code === 'locked') { toast(m.message); loadChannels().then(() => { const c = S.channels.find(x => x.name === m.channel); if (c) askRoomPass(c, S.route); }); }
       if (m.code === 'room_deleted') {
@@ -680,14 +694,14 @@ ROUTES.login = () => {
     <img class="appicon-img" src="brand/app-icon.png" alt="">
     <img class="wordmark-img" src="brand/wordmark.png" alt="WORMADI วอมาดิ คุยปุ๊บ งานเดินต่อ">
     <h2>เข้าสู่ระบบ</h2>
-    <form id="lf" novalidate>
+    <form id="lf" novalidate autocomplete="off">
       <div class="native-only">
         <div class="field">${icon('globe', 'i lead')}<input id="server" placeholder="ที่อยู่เซิร์ฟเวอร์ เช่น wormadi.pages.dev" autocapitalize="off" spellcheck="false" inputmode="url"></div>
         <div class="err" id="serverInfo" style="color:var(--muted)"></div>
       </div>
       ${acc || NATIVE ? `
-      <div class="field">${icon('user', 'i lead')}<input id="emp" placeholder="รหัสพนักงาน" autocomplete="username" autocapitalize="off" spellcheck="false"></div>
-      <div class="field">${icon('lock', 'i lead')}<input id="pw" type="password" placeholder="รหัสผ่าน" autocomplete="current-password">
+      <div class="field">${icon('user', 'i lead')}<input id="emp" name="wm-staff" placeholder="รหัสพนักงาน" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="numeric" data-lpignore="true" data-1p-ignore data-form-type="other"></div>
+      <div class="field">${icon('lock', 'i lead')}<input id="pw" name="wm-pin" ${secretAttrs('รหัสผ่าน')}>
         <button type="button" class="ib trail" id="eye" aria-label="แสดงรหัสผ่าน">${icon('eyeoff')}</button></div>
       <label class="check"><input type="checkbox" id="remember" checked> จดจำการเข้าสู่ระบบ</label>
       <p class="small muted" style="margin:2px 4px 0">1 บัญชีใช้ได้ทีละ 1 เครื่อง เข้าเครื่องใหม่ เครื่องเดิมจะออกจากระบบอัตโนมัติ</p>`
@@ -708,7 +722,7 @@ ROUTES.login = () => {
     }
     if ($('emp')) $('emp').value = lsGet('walkie_emp') || '';
     if ($('lname')) { $('lname').value = S.profile.name || ''; $('ldept').value = S.profile.dept || ''; }
-    if ($('eye')) $('eye').onclick = () => { const p = $('pw'); p.type = p.type === 'password' ? 'text' : 'password'; $('eye').innerHTML = icon(p.type === 'password' ? 'eyeoff' : 'eye'); };
+    if ($('eye')) $('eye').onclick = () => { const shown = toggleSecret($('pw')); $('eye').innerHTML = icon(shown ? 'eye' : 'eyeoff'); $('eye').setAttribute('aria-label', shown ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'); };
     $('lf').onsubmit = async e => {
       e.preventDefault();
       const err = $('lerr'); err.textContent = '';
@@ -741,6 +755,45 @@ ROUTES.login = () => {
 async function afterSignIn() {
   await Promise.all([loadChannels(), refreshMe()]);
   startConnection();
+  enablePush(true);
+}
+// ---- Web Push (SOS when the app is closed). The service worker reads the token from IndexedDB.
+function idb(fn) {
+  return new Promise((res, rej) => {
+    if (!('indexedDB' in self)) return res(null);
+    const o = indexedDB.open('wormadi', 1);
+    o.onupgradeneeded = () => o.result.createObjectStore('kv');
+    o.onsuccess = () => { const t = o.result.transaction('kv', 'readwrite'); const st = t.objectStore('kv'); const r = fn(st); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error); };
+    o.onerror = () => res(null);
+  });
+}
+const saveAuthForSw = () => idb(st => st.put({ token: S.token || '', base: serverBase || location.origin + location.pathname.replace(/[^/]*$/, '').replace(/\/$/, '') }, 'auth')).catch(() => {});
+const pushSupported = () => !NATIVE && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
+function pushState() {
+  if (NATIVE) return 'native';
+  if (!pushSupported() || !S.config.push) return 'na';
+  return Notification.permission === 'granted' ? 'on' : 'off';
+}
+async function enablePush(ask) {
+  if (!S.token || !pushSupported() || !S.config.push || !S.config.vapidPublic) return;
+  try {
+    await saveAuthForSw();
+    if (Notification.permission === 'default' && ask) await Notification.requestPermission();
+    if (Notification.permission !== 'granted') return;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const k = S.config.vapidPublic.replace(/-/g, '+').replace(/_/g, '/');
+      const key = Uint8Array.from(atob(k + '='.repeat((4 - k.length % 4) % 4)), c => c.charCodeAt(0));
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    }
+    await api('/api/push', { method: 'POST', body: { subscription: sub.toJSON() } });
+  } catch (e) { console.warn('push', e); }
+}
+async function disablePush() {
+  try { await idb(st => st.delete('auth')); } catch {}
+  if (!pushSupported()) return;
+  try { const reg = await navigator.serviceWorker.getRegistration(); const sub = reg && await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch {}
 }
 function signOut(msg) {
   const t = S.token;
@@ -749,7 +802,7 @@ function signOut(msg) {
   S.token = null; S.user = null; S.me = null; S.roster = null; S.unread = 0;
   lsSet('walkie_token', null); lsSet('walkie_user', null);
   if (!ACC()) { S.profile = {}; lsSet('walkie_profile', null); }
-  setWake(false); setKeepAlive(false); hideSos();
+  setWake(false); setKeepAlive(false); hideSos(); disablePush();
   go('login', {}, true);
   if (msg) toast(msg);
 }
@@ -761,10 +814,10 @@ ROUTES.setpw = () => {
     <img class="appicon-img" src="brand/app-icon.png" alt="">
     <h2 style="margin-top:16px">ตั้งรหัสผ่านใหม่</h2>
     <p class="muted" style="text-align:center;margin:0 0 6px;max-width:340px">สวัสดี <b>${esc(S.user?.name || '')}</b><br>ครั้งแรกที่เข้าใช้งาน กรุณาตั้งรหัสผ่านของคุณเอง อย่างน้อย 6 ตัว และอย่าบอกรหัสนี้กับผู้อื่น</p>
-    <form id="pf" novalidate>
-      <div class="field ${known ? 'hidden' : ''}">${icon('lock', 'i lead')}<input id="op" type="password" placeholder="รหัสผ่านปัจจุบัน" autocomplete="current-password"></div>
-      <div class="field">${icon('lock', 'i lead')}<input id="np" type="password" placeholder="รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)" autocomplete="new-password" minlength="6"></div>
-      <div class="field">${icon('lock', 'i lead')}<input id="np2" type="password" placeholder="ยืนยันรหัสผ่านใหม่" autocomplete="new-password"></div>
+    <form id="pf" novalidate autocomplete="off">
+      <div class="field ${known ? 'hidden' : ''}">${icon('lock', 'i lead')}<input id="op" ${secretAttrs('รหัสผ่านปัจจุบัน')}></div>
+      <div class="field">${icon('lock', 'i lead')}<input id="np" ${secretAttrs('รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)', 'minlength="6"')}></div>
+      <div class="field">${icon('lock', 'i lead')}<input id="np2" ${secretAttrs('ยืนยันรหัสผ่านใหม่')}></div>
       <div class="err" id="perr" role="alert"></div>
       <button class="btn primary" type="submit" id="pbtn">บันทึกและเข้าใช้งาน</button>
       <button class="btn" type="button" id="pout" style="margin-top:12px">ออกจากระบบ</button>
@@ -802,6 +855,8 @@ ROUTES.home = () => {
       <button class="ib" id="bell" aria-label="การแจ้งเตือน">${icon('bell')}<span class="badge hidden" id="bellBadge"></span></button>
     </div>
     ${installBar()}
+    ${pushState() === 'off' ? `<button class="card" id="pushAsk" style="display:flex;align-items:center;gap:12px;margin:10px 14px 4px;padding:14px;width:calc(100% - 28px);text-align:left;border:2px solid #cf2020;color:var(--text)">
+      <span class="ic" style="background:#cf2020;color:#fff">${icon('siren')}</span><span class="grow"><b>เปิดการแจ้งเตือนเหตุฉุกเฉิน</b><br><span class="small muted">ให้เครื่องดังเมื่อมีเหตุ แม้ปิดแอปอยู่ (แตะ แล้วกด "อนุญาต")</span></span>${icon('chev')}</button>` : ''}
     ${S.me && !S.me.channel ? `<button class="card" data-to="channels" style="display:flex;align-items:center;gap:12px;margin:10px 14px 4px;padding:14px;width:calc(100% - 28px);text-align:left;border:2px solid var(--primary);color:var(--text)">
       <span class="ic" style="background:var(--primary);color:#fff">${icon('team')}</span><span class="grow"><b>ยังไม่ได้เข้ากลุ่ม</b><br><span class="small muted">แตะเพื่อเลือกกลุ่ม หรือสร้างกลุ่มใหม่</span></span>${icon('chev')}</button>` : ''}
     <div class="tiles6">
@@ -826,6 +881,7 @@ ROUTES.home = () => {
     };
     $('bell').onclick = () => go('notifications');
     $('homeAv').onclick = () => (S.user ? changeAvatar() : go('profile'));
+    if ($('pushAsk')) $('pushAsk').onclick = async () => { await enablePush(true); if (Notification.permission === 'denied') toast('การแจ้งเตือนถูกปิดในเบราว์เซอร์: เปิดได้ที่ การตั้งค่าเว็บไซต์ > การแจ้งเตือน'); render(); };
     bindInstallBar(root);
     setConn(S.conn); renderBadges();
   });
@@ -850,6 +906,9 @@ ROUTES.ptt = () => {
       ${ch && ch.dm ? `<button class="btn sm" id="hangUp" type="button" style="background:#cf2020;color:#fff;border-color:#cf2020">${icon('x')}วางสาย</button>` : ''}
       <button class="btn sm" id="toChat" type="button">${icon('chat')}พิมพ์ / ฟังย้อนหลัง</button>
       ${ch && ch.id ? `<button class="btn sm" id="shareRoom" type="button">${icon('send')}แชร์ห้อง</button>` : ''}</div>
+    ${ch && !ch.dm ? `<div style="display:flex;justify-content:center;gap:10px;margin:0 0 10px">
+      <button class="btn sm" id="roomPeople" type="button">${icon('team')}สมาชิกในกลุ่ม</button>
+      <button class="btn sm" id="leaveRoom" type="button" style="color:#fff;background:#cf2020;border-color:#cf2020">${icon('logout')}ออกจากกลุ่ม</button></div>` : ''}
     <p class="small web-only" style="text-align:center;color:var(--ptt-page-muted);margin:0 0 14px">บนคอมพิวเตอร์ กด Spacebar ค้างไว้เพื่อพูดได้</p>
   </div>`, root => {
     bindBack(root);
@@ -858,6 +917,8 @@ ROUTES.ptt = () => {
     $('toChat').onclick = () => go('chat');
     if ($('hangUp')) $('hangUp').onclick = () => { endCall(); toast('วางสายแล้ว'); };
     if ($('shareRoom')) $('shareRoom').onclick = () => shareRoom(ch);
+    if ($('leaveRoom')) $('leaveRoom').onclick = () => leaveRoom();
+    if ($('roomPeople')) $('roomPeople').onclick = roomMembersSheet;
     $('spk').onclick = () => { S.prefs.speaker = !S.prefs.speaker; savePrefs(); applyVolume(); render(); };
     renderTalk(); renderUnlock();
   });
@@ -887,10 +948,10 @@ ROUTES.channels = p => {
           <button class="ib" data-share="${c.id}" aria-label="แชร์ห้อง ${esc(c.name)}" style="color:var(--primary-fg)">${icon('send')}</button>
           ${c.can_delete ? `<button class="ib" data-del="${c.id}" aria-label="ลบห้อง ${esc(c.name)}" style="color:var(--err-fg)">${icon('trash')}</button>` : ''}
           <button class="ib" data-fav="${esc(c.name)}" aria-label="${fav ? 'เอาออกจากรายการโปรด' : 'เพิ่มในรายการโปรด'}" style="color:${fav ? '#e0a100' : 'var(--nav-muted)'}">${icon(fav ? 'starf' : 'star')}</button>
-          ${cur ? `<span style="color:var(--primary)">${icon('checkc')}</span>` : `<span class="chev">${icon('chev')}</span>`}</div>`;
+          ${cur ? `<button class="btn sm" data-leave type="button" style="color:var(--err-fg)">ออก</button>` : `<span class="chev">${icon('chev')}</span>`}</div>`;
       }).join('') : `<div class="empty">${tab === 'fav' ? 'ยังไม่มีรายการโปรด แตะ ☆ ที่ห้องเพื่อเพิ่ม' : q ? 'ไม่พบห้อง' : 'ยังไม่มีห้อง กด “สร้างห้องใหม่” เพื่อเริ่มคุยกับทีม'}</div>`;
       for (const r of $$('[data-ch]', root)) r.onclick = e => {
-        if (e.target.closest('[data-fav],[data-del],[data-share]')) return;
+        if (e.target.closest('[data-fav],[data-del],[data-share],[data-leave]')) return;
         enterRoom(r.dataset.ch, p.then || 'ptt');
       };
       for (const f of $$('[data-fav]', root)) f.onclick = () => {
@@ -898,6 +959,7 @@ ROUTES.channels = p => {
         S.favs = S.favs.includes(n) ? S.favs.filter(x => x !== n) : [...S.favs, n];
         lsSet('walkie_favs', JSON.stringify(S.favs)); draw();
       };
+      for (const b of $$('[data-leave]', root)) b.onclick = () => leaveRoom();
       for (const b of $$('[data-share]', root)) b.onclick = () => { const c = S.channels.find(x => String(x.id) === b.dataset.share); if (c) shareRoom(c); };
       for (const d of $$('[data-del]', root)) d.onclick = async () => {
         const c = S.channels.find(x => String(x.id) === d.dataset.del);
@@ -960,7 +1022,7 @@ function incomingInvite(m) {
     <h3 style="margin:4px 0">${esc(m.from.name)}</h3><p style="margin:6px 0 16px">เชิญคุณเข้ากลุ่ม <b>“${esc(m.channel)}”</b>${m.locked ? '<br><span class="small muted">กลุ่มนี้มีรหัส แต่คุณได้รับเชิญจึงเข้าได้เลย</span>' : ''}</p>
     <div style="display:flex;gap:12px"><button class="btn" id="invNo" type="button">ไว้ทีหลัง</button><button class="btn primary" id="invYes" type="button">${icon('team')}เข้ากลุ่ม</button></div></div>`, () => {
     $('invNo').onclick = closeSheet;
-    $('invYes').onclick = async () => { closeSheet(); await loadChannels(); enterRoom(m.channel, 'ptt'); };
+    $('invYes').onclick = async () => { closeSheet(); await loadChannels(); enterRoom(m.channel, 'ptt', { confirmed: true }); };
   });
 }
 
@@ -1008,9 +1070,58 @@ function incomingCall(m) {
   if (document.hidden) systemNotify(`📞 ${m.from.name} เรียกวอส่วนตัว`, 'แตะเพื่อเปิดแอปแล้วรับสาย', 'call', true);
 }
 
+/** ask before joining a group */
+function confirmRoom(c, then) {
+  const cur = S.me && S.me.channel && !isDm(S.me.channel) ? S.me.channel : '';
+  sheet(`<div style="text-align:center">
+      <div style="display:flex;justify-content:center;margin:4px 0 8px">${chanIcon(c)}</div>
+      <h3 style="margin:4px 0">เข้ากลุ่ม “${esc(c.name)}” ?</h3>
+      <p class="small muted" style="margin:4px 0 16px">${S.counts[c.name] || 0} คนออนไลน์${c.sub ? ' · ' + esc(c.sub) : ''}${c.locked && !c.access ? '<br>กลุ่มนี้มีรหัส ต้องใส่รหัสก่อนเข้า' : ''}${cur ? `<br>จะออกจากกลุ่ม “${esc(cur)}”` : ''}</p>
+      <div style="display:flex;gap:10px"><button class="btn" id="crNo" type="button">ยกเลิก</button><button class="btn primary" id="crYes" type="button">${icon('team')}เข้ากลุ่ม</button></div></div>`, () => {
+    $('crNo').onclick = closeSheet;
+    $('crYes').onclick = () => { closeSheet(); enterRoom(c.name, then, { confirmed: true }); };
+  });
+}
+/** leave the current group (stay signed in: SOS still rings) */
+function leaveRoom(ask = true) {
+  const ch = S.me && S.me.channel;
+  if (!ch) return;
+  if (isDm(ch)) { endCall(); return; }
+  const go2 = () => {
+    closeSheet(); stopTalking(true);
+    lsSet('walkie_channel', '');
+    joinNow();                     // no channel -> "not in a group"
+    toast(`ออกจากกลุ่ม “${ch}” แล้ว`);
+    if (['ptt', 'chat'].includes(S.route)) go('home', {}, true); else render();
+  };
+  if (!ask) return go2();
+  sheet(`<div style="text-align:center"><h3>ออกจากกลุ่ม “${esc(ch)}” ?</h3>
+    <p class="small muted" style="margin:4px 0 16px">จะไม่ได้ยินเสียงในกลุ่มนี้ (ยังได้รับแจ้งเหตุฉุกเฉินตามปกติ)</p>
+    <div style="display:flex;gap:10px"><button class="btn" id="lvNo" type="button">ยกเลิก</button><button class="btn" id="lvYes" type="button" style="background:#cf2020;color:#fff;border-color:#cf2020">${icon('logout')}ออกจากกลุ่ม</button></div></div>`, () => {
+    $('lvNo').onclick = closeSheet; $('lvYes').onclick = go2;
+  });
+}
+/** people in the current group; the creator (or an admin) can remove someone */
+function roomMembersSheet() {
+  const ch = S.me && S.me.channel; if (!ch || isDm(ch)) return;
+  const c = S.channels.find(x => x.name === ch) || {};
+  const boss = S.user && (S.user.role === 'admin' || c.created_by === S.user.id);
+  const users = (S.state.users || []).filter((u, i, a) => a.findIndex(x => x.id === u.id) === i);
+  sheet(`<h3>สมาชิกในกลุ่ม “${esc(ch)}”</h3><p class="small muted" style="margin-top:0">${users.length} คนอยู่ในกลุ่มตอนนี้${boss ? ' · คุณเป็นผู้สร้างกลุ่ม นำคนออกได้' : ''}</p>
+    <div class="list" style="margin:0">${users.map(u => `<div class="li">${avatar({ id: u.id, name: u.name, has_avatar: 1 })}<div class="grow"><div class="t1 ell">${esc(u.name)}${S.user && u.id === S.user.id ? ' (คุณ)' : ''}</div><div class="t2 ell">${esc(u.dept || '')}</div></div>
+      ${boss && S.user && u.id !== S.user.id ? `<button class="btn sm" data-kick="${u.id}" data-kname="${esc(u.name)}" type="button" style="color:var(--err-fg)">นำออก</button>` : ''}</div>`).join('') || '<div class="empty">ยังไม่มีใคร</div>'}</div>`, bg => {
+    for (const b of $$('[data-kick]', bg)) b.onclick = () => {
+      if (!confirm(`นำ ${b.dataset.kname} ออกจากกลุ่ม “${ch}”?\nเขาจะกลับเข้ามาได้เมื่อคุณเชิญอีกครั้ง`)) return;
+      sendMsg({ type: 'kick', to: Number(b.dataset.kick), channel: ch }); closeSheet();
+    };
+  });
+}
+
 /** join a room; a locked room asks for its password once */
-function enterRoom(name, then) {
+function enterRoom(name, then, opts = {}) {
   const c = S.channels.find(x => x.name === name);
+  if (S.me && S.me.channel === name) { if (then) go(then, {}, true); return; }     // already here
+  if (!opts.confirmed && c) return confirmRoom(c, then);
   if (c && c.locked && !c.access) return askRoomPass(c, then);
   if (!S.me || S.me.channel !== name) { stopTalking(true); joinNow(name); }
   if (then) go(then, {}, true);
@@ -1026,7 +1137,7 @@ function askRoomPass(c, then) {
       try {
         await api(`/api/channels/${c.id}/unlock`, { method: 'POST', body: { password: $('rp').value } });
         c.access = true; closeSheet(); toast('เข้าห้องแล้ว');
-        enterRoom(c.name, then);
+        enterRoom(c.name, then, { confirmed: true });
       } catch (er) { $('rperr').textContent = er.message; $('rpb').disabled = false; }
     };
   });
@@ -1058,7 +1169,7 @@ function createRoomSheet(then) {
         await api('/api/channels', { method: 'POST', body: { name, sub: $('crs').value.trim(), color, password: pw || undefined } });
         await loadChannels(); closeSheet();
         toast(pw ? `สร้างห้องแล้ว บอกรหัสห้องให้เพื่อนในทีม` : 'สร้างห้องแล้ว');
-        enterRoom(name, then);
+        enterRoom(name, then, { confirmed: true });
       } catch (er) { err.textContent = er.message; $('crb').disabled = false; }
     };
   });
@@ -1218,7 +1329,8 @@ ROUTES.map = async p => {
     <div class="gmapinfo" id="gInfo" aria-live="polite"></div></div>`, root => bindBack(root));
   let L, data, sosRows = [];
   try { [L, data] = await Promise.all([loadLeaflet(), api('/api/map')]); } catch (e) { const g = $('gmap'); if (g) g.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-  try { sosRows = (await api('/api/sos')).filter(x => x.status === 'open' && x.lat != null); } catch {}
+  // SOS points stay on the map for 1 day only
+  try { sosRows = (await api('/api/sos')).filter(x => x.status === 'open' && x.lat != null && x.ts > Date.now() - 86_400_000); } catch {}
   const el = $('gmap'); if (!el || S.route !== 'map') return;
   el.innerHTML = '';
   const map = L.map(el, { zoomControl: true, attributionControl: true }).setView(MAP_HOME, 6);
@@ -1244,8 +1356,9 @@ ROUTES.map = async p => {
       mk.on('dragend', async () => { const ll = mk.getLatLng(); pin.lat = ll.lat; pin.lng = ll.lng; try { await api(`/api/map/pins/${pin.id}`, { method: 'PATCH', body: pin }); toast('ย้ายจุดแล้ว'); } catch (e) { toast(e.message); } });
     }
     for (const x of sosRows) {
-      L.marker([x.lat, x.lng], { icon: L.divIcon({ className: 'gpin-wrap', iconSize: null, iconAnchor: [18, 18], html: `<span class="gpin sos"><span class="ic" style="background:#d81e1e">${icon('siren')}</span>เหตุฉุกเฉิน · ${esc(x.reporter)}</span>` }), zIndexOffset: 1000 })
-        .addTo(pinLayer).on('click', () => sheet(`<h3 style="color:var(--talk-fg)">🚨 เหตุฉุกเฉิน</h3><p>แจ้งโดย <b>${esc(x.reporter)}</b>${x.reporter_dept ? ' (' + esc(x.reporter_dept) + ')' : ''}<br>${fmtTime(x.ts)} น.${x.place ? ' · ' + esc(x.place) : ''}</p>
+      // just a red dot; tap it for the details
+      L.marker([x.lat, x.lng], { icon: L.divIcon({ className: 'gpin-wrap', iconSize: [22, 22], iconAnchor: [11, 11], html: '<span class="sosdot" aria-label="เหตุฉุกเฉิน"></span>' }), zIndexOffset: 1000, title: 'เหตุฉุกเฉิน · ' + x.reporter, keyboard: true })
+        .addTo(pinLayer).on('click', () => sheet(`<h3 style="color:var(--talk-fg)">🚨 เหตุฉุกเฉิน</h3><p>แจ้งโดย <b>${esc(x.reporter)}</b>${x.reporter_dept ? ' (' + esc(x.reporter_dept) + ')' : ''}<br>${whenText(x.ts)}${x.place ? ' · ' + esc(x.place) : ''}${x.note ? '<br>' + esc(x.note) : ''}</p>
           <button class="btn primary" id="sNav">${icon('pin')}นำทางไปจุดเกิดเหตุ</button>`, () => { $('sNav').onclick = () => window.open(`https://www.google.com/maps/dir/?api=1&destination=${x.lat},${x.lng}`, '_blank'); }));
     }
     const unplaced = data.pins.filter(x => x.lat == null || x.lng == null);
@@ -1593,8 +1706,8 @@ ROUTES.profile = () => {
     $('cam').onclick = $('cam2').onclick = changeAvatar;
     const big = root.querySelector('.bigav .av'); if (big) { big.style.cursor = 'pointer'; big.onclick = changeAvatar; }
     $('chpw').onclick = () => sheet(`<h3>เปลี่ยนรหัสผ่าน</h3>
-      <div class="field">${icon('lock', 'i lead')}<input id="op" type="password" placeholder="รหัสผ่านเดิม" autocomplete="current-password"></div>
-      <div class="field">${icon('lock', 'i lead')}<input id="np" type="password" placeholder="รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)" autocomplete="new-password"></div>
+      <div class="field">${icon('lock', 'i lead')}<input id="op" ${secretAttrs('รหัสผ่านเดิม')}></div>
+      <div class="field">${icon('lock', 'i lead')}<input id="np" ${secretAttrs('รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)')}></div>
       <div class="err" id="perr"></div><button class="btn primary" id="psave">บันทึก</button>`, bg => {
       bg.querySelector('#psave').onclick = async () => {
         try { await api('/api/me/password', { method: 'POST', body: { old: $('op').value, new: $('np').value } }); closeSheet(); toast('เปลี่ยนรหัสผ่านแล้ว'); }
@@ -1655,7 +1768,8 @@ ROUTES.settings = () => {
       ${row('sLang', 'globe', 'ภาษา', '', '<span class="small muted">ไทย</span>')}
       ${row('sTheme', curTheme() === 'dark' ? 'moon' : 'sun', 'ธีม', '', `<span class="small muted">${curTheme() === 'dark' ? 'กลางคืน (มืด)' : 'ภาคสนาม (สว่าง)'}</span>`)}
       <label class="setrow web-only">${icon('sun', 'i lead')}<div class="grow"><b>เปิดจอค้างไว้ระหว่างใช้งาน</b><small>ได้ยินเสียงแน่นอนที่สุดสำหรับเว็บแอป</small></div><input type="checkbox" class="sw" id="optWake" ${wakeOn() ? 'checked' : ''}></label>
-      <label class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินเสียงเมื่อพับ / ปิดแอป</b><small>${NATIVE ? 'เปิด = ได้ยินแม้พับแอป ปิดจอ หรือปัดปิดแอป · ปิด = เงียบเมื่อออกจากหน้าแอป' : IOS ? 'เปิด = ได้ยินขณะพับแอปชั่วครู่ (iPhone อาจหยุดเสียงเมื่อพับนาน)' : 'เปิด = ได้ยินเมื่อพับแอปหรือปิดจอ · ถ้าปัดปิดแอปทิ้ง ให้ใช้แอป Android'}</small></div><input type="checkbox" class="sw" id="optKeep" ${keepOn() ? 'checked' : ''}></label>
+      <div class="setrow" style="background:color-mix(in srgb, #cf2020 8%, transparent)">${icon('siren', 'i lead')}<div class="grow"><b>เหตุฉุกเฉิน (SOS) ดังเสมอ</b><small>เข้าสู่ระบบอยู่ = ได้ยินทุกครั้ง แม้พับหรือปิดแอป · หยุดเมื่อออกจากระบบเท่านั้น${pushState() === 'off' ? ' · <b style="color:var(--err-fg)">ยังไม่ได้อนุญาตการแจ้งเตือน</b>' : ''}</small></div>${pushState() === 'off' ? '<button class="btn sm primary" id="sPush" type="button">อนุญาต</button>' : '<span class="small muted">เปิดอยู่</span>'}</div>
+      <label class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินเสียงคุยเมื่อพับ / ปิดแอป</b><small>${NATIVE ? 'เปิด = ได้ยินแม้พับแอป ปิดจอ หรือปัดปิดแอป · ปิด = เงียบเมื่อออกจากหน้าแอป' : IOS ? 'เปิด = ได้ยินขณะพับแอปชั่วครู่ (iPhone อาจหยุดเสียงเมื่อพับนาน)' : 'เปิด = ได้ยินเมื่อพับแอปหรือปิดจอ · ถ้าปัดปิดแอปทิ้ง ให้ใช้แอป Android'}</small></div><input type="checkbox" class="sw" id="optKeep" ${keepOn() ? 'checked' : ''}></label>
       ${!NATIVE && !standalone() ? row('sInstall', 'download', 'ติดตั้งแอปลงหน้าจอ', installEvt ? 'แตะเพื่อติดตั้ง ใช้งานเต็มจอเหมือนแอป' : IOS ? 'Safari: ปุ่มแชร์ > เพิ่มไปยังหน้าจอโฮม' : 'แตะเพื่อดูวิธีติดตั้ง') : ''}
       ${NATIVE ? row('sBatt', 'battery', 'ให้แอปทำงานตอนจอดับ', 'ปิดการประหยัดแบตเตอรี่') : ''}
     </div>
@@ -1684,7 +1798,8 @@ ROUTES.settings = () => {
     on('sHelp', help); on('sAbout', about);
     on('sOut', () => { if (confirm('ออกจากระบบ?')) signOut(); });
     const w = $('optWake'); if (w) w.onchange = () => { lsSet('walkie_wake', w.checked ? '1' : '0'); setWake(w.checked); };
-    const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); setKeepAlive(k.checked); toast(k.checked ? 'ได้ยินเสียงเมื่อพับ / ปิดแอป: เปิด' : 'ได้ยินเสียงเมื่อพับ / ปิดแอป: ปิด (เงียบเมื่อออกจากหน้าแอป)'); };
+    const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); toast(k.checked ? 'ได้ยินเสียงคุยเมื่อพับ / ปิดแอป: เปิด' : 'ปิดเสียงคุยเมื่อพับแอป (เหตุฉุกเฉินยังดังตามปกติ)'); };
+    const pb = $('sPush'); if (pb) pb.onclick = async () => { await enablePush(true); render(); };
   });
 };
 function help() {
@@ -1933,7 +2048,7 @@ function updateMediaSession() {
   const t = S.state.talker;
   try { navigator.mediaSession.metadata = new MediaMetadata({ title: talking ? 'คุณกำลังพูด' : t ? `${t} กำลังพูด` : 'พร้อมรับการสื่อสาร', artist: `WORMADI · ${S.me.channel}`, artwork: [{ src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }] }); navigator.mediaSession.playbackState = 'playing'; } catch {}
 }
-document.addEventListener('pointerdown', () => { if (S.me && keepOn() && !keepAudio) setKeepAlive(true); if (S.me && wakeOn() && !wakeLock) setWake(true); }, { passive: true });
+document.addEventListener('pointerdown', () => { if (S.me && !keepAudio) setKeepAlive(true); if (S.me && wakeOn() && !wakeLock) setWake(true); }, { passive: true });
 
 // ================================================================ Android app bridge
 async function probeServer() {
@@ -1983,7 +2098,7 @@ function onNativeEvent(m) {
   const signedIn = ACC() ? !!S.token : !!S.profile.name;
   if (signedIn && ACC() && S.user && S.user.must_change) { go('setpw', {}, true); return; }
   if (signedIn) {
-    if (ACC()) refreshMe();
+    if (ACC()) { refreshMe(); enablePush(false); }
     stopped = false;
     if (NATIVE) {
       const st = await WN.getStatus();

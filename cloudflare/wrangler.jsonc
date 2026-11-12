@@ -28,6 +28,8 @@
 
   "vars": {
     "APP_NAME": "WORMADI",
+    // Web Push (public key; the private key is the secret VAPID_PRIVATE_JWK)
+    "VAPID_PUBLIC": "BIDCoJcA_RTGiw9il9EEZYFtDshewDdJsUY4oLzIAy8FUz49bJ0xtzvLRNqG97GwdHCmiOUylGhA6Ttt67i1KCs",
     // ลิงก์หลักของแอป (ลิงก์ *.workers.dev เดิมจะพาไปที่นี่)
     "PUBLIC_URL": "https://wormadi.pages.dev",   // ลิงก์หลัก (หน้าเว็บจาก workers.dev พาไปที่นี่ · API ยังใช้ได้เป็นทางสำรอง)
     "ORG_NAME": "Mitr Lao Sugar Co., Ltd.",

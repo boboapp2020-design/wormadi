@@ -342,3 +342,12 @@ video.scan { width:100%; border-radius:12px; background:#000; aspect-ratio:1; ob
 @keyframes sospulse { 50% { box-shadow:0 0 0 10px rgba(216,30,30,.25); } }
 .gme { display:block; width:22px; height:22px; border-radius:50%; background:#1d63d6; border:4px solid #fff; box-shadow:0 0 0 2px rgba(29,99,214,.4), 0 2px 6px rgba(0,0,0,.4); }
 .leaflet-container { font-family:inherit; }
+
+/* SOS on the map: a small pulsing red dot (tap for details) */
+.sosdot { display:block; width:22px; height:22px; border-radius:50%; background:#d81e1e; border:3px solid #fff;
+  box-shadow:0 0 0 0 rgba(216,30,30,.6), 0 2px 6px rgba(0,0,0,.45); animation:sosdot 1.4s infinite; cursor:pointer; }
+@keyframes sosdot { 70% { box-shadow:0 0 0 14px rgba(216,30,30,0), 0 2px 6px rgba(0,0,0,.45); } 100% { box-shadow:0 0 0 0 rgba(216,30,30,0), 0 2px 6px rgba(0,0,0,.45); } }
+
+/* password shown as dots without being a "password" field (so phones don't offer saved accounts) */
+input.masked { -webkit-text-security: disc; text-security: disc; }
+input.masked.show { -webkit-text-security: none; text-security: none; }

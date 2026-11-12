@@ -106,8 +106,12 @@ export class WalkieRoom extends DurableObject {
   /** open room, or the creator / an admin / someone who already entered the room password */
   async canEnter(ch, uid, role) {
     const m = this.meta.get(ch);
-    if (!m || !m.locked || !this.env.DB) return true;
+    if (!m || !this.env.DB) return true;
     if (role === 'admin' || (uid && m.created_by === uid)) return true;
+    if (uid) {
+      try { if (await this.env.DB.prepare('SELECT 1 FROM channel_bans WHERE channel_id = ? AND user_id = ?').bind(m.id, uid).first()) return false; } catch {}
+    }
+    if (!m.locked) return true;
     if (!uid) return false;
     try { return !!(await this.env.DB.prepare('SELECT 1 FROM channel_access WHERE channel_id = ? AND user_id = ?').bind(m.id, uid).first()); }
     catch { return false; }
@@ -276,7 +280,9 @@ export class WalkieRoom extends DurableObject {
         let ch = this.channels.includes(msg.channel) ? msg.channel
           : dm && uid && Number(dm[1]) < Number(dm[2]) && [Number(dm[1]), Number(dm[2])].includes(uid) ? msg.channel : null;
         if (ch && !dm && !(await this.canEnter(ch, uid, role))) {
-          this.send(ws, { type: 'error', code: 'locked', channel: ch, message: `ห้อง "${ch}" มีรหัส ใส่รหัสห้องก่อน` });
+          const banned = this.env.DB && uid && this.meta.get(ch) && await this.env.DB.prepare('SELECT 1 FROM channel_bans WHERE channel_id = ? AND user_id = ?').bind(this.meta.get(ch).id, uid).first();
+          this.send(ws, banned ? { type: 'error', code: 'banned', channel: ch, message: `คุณถูกนำออกจากกลุ่ม "${ch}" เข้าได้อีกเมื่อผู้สร้างกลุ่มเชิญ` }
+            : { type: 'error', code: 'locked', channel: ch, message: `ห้อง "${ch}" มีรหัส ใส่รหัสห้องก่อน` });
           if (this.info(ws).channel) return;     // stay in the current room
           ch = null;
         }
@@ -318,6 +324,29 @@ export class WalkieRoom extends DurableObject {
       case 'ptt_end':
         if (this.talker.get(me.channel)?.ws === ws) await this.releaseFloor(me.channel);
         break;
+      case 'kick': {                           // the group's creator (or an admin) removes someone
+        const to = Number(msg.to), ch = String(msg.channel || '');
+        const meta = this.meta.get(ch);
+        if (!me.uid || !to || to === me.uid || !meta) return;
+        if (!(me.role === 'admin' || meta.created_by === me.uid)) return this.send(ws, { type: 'error', code: 'kick', message: 'นำคนออกได้เฉพาะผู้สร้างกลุ่ม' });
+        if (this.env.DB) {
+          try {
+            await this.env.DB.batch([
+              this.env.DB.prepare('INSERT OR REPLACE INTO channel_bans (channel_id, user_id, ts) VALUES (?, ?, ?)').bind(meta.id, to, Date.now()),
+              this.env.DB.prepare('DELETE FROM channel_access WHERE channel_id = ? AND user_id = ?').bind(meta.id, to),
+            ]);
+          } catch (e) { console.error('kick failed', e); }
+        }
+        let name = '';
+        for (const o of this.authed()) {
+          const c = this.info(o);
+          if (c.uid !== to) continue;
+          name = c.name;
+          if (c.channel === ch) { this.leave(o); this.send(o, { type: 'kicked', channel: ch, by: me.name }); }
+        }
+        this.send(ws, { type: 'kick_done', to, name, channel: ch });
+        break;
+      }
       case 'invite': {                         // invite someone into a room I can enter
         const to = Number(msg.to), ch = String(msg.channel || '');
         if (!me.uid || !to || to === me.uid || !this.channels.includes(ch)) return;
@@ -329,6 +358,7 @@ export class WalkieRoom extends DurableObject {
             await this.env.DB.batch([
               // an invite to a locked room also lets that person in (no password needed)
               ...(meta.locked ? [this.env.DB.prepare('INSERT OR IGNORE INTO channel_access (channel_id, user_id, ts) VALUES (?, ?, ?)').bind(meta.id, to, now)] : []),
+              this.env.DB.prepare('DELETE FROM channel_bans WHERE channel_id = ? AND user_id = ?').bind(meta.id, to),
               this.env.DB.prepare('INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, ?, ?, ?, ?, ?)')
                 .bind(now, to, 'invite', `${me.name} เชิญคุณเข้ากลุ่ม "${ch}"`, 'แตะเพื่อเข้ากลุ่ม', 'room:' + ch),
             ]);

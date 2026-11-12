@@ -4,6 +4,7 @@
 //   สิทธิ์: user (พนักงาน) < lead (หัวหน้า: มอบงาน, ปิดเหตุ SOS, ดูรายงาน/log) < admin (ผู้ดูแลระบบ)
 import { WalkieRoom, reactionsFor, EMOJIS } from './room.js';
 import { toWav } from './codec.js';
+import { pushAll, pushReady } from './push.js';
 import { hashPassword, verifyPassword, createSession, userFromToken, bearer, sha256, roleAtLeast, ROLES, PUBLIC_USER } from './auth.js';
 
 export { WalkieRoom };
@@ -169,7 +170,7 @@ async function api(req, env, url) {
   // ---------------------------------------------------------------- public
   if (p === '/api/config') {
     return json({
-      server: 'cloudflare', accounts: true, recording: !!(env.REC || env.DB), emojis: EMOJIS, sosKinds: SOS_KINDS,
+      server: 'cloudflare', accounts: true, recording: !!(env.REC || env.DB), push: pushReady(env), vapidPublic: env.VAPID_PUBLIC || '', emojis: EMOJIS, sosKinds: SOS_KINDS,
       features: ['chat', 'react', 'roster', 'history', 'log', 'accounts', 'tasks', 'sos', 'map', 'report'],
       org: env.ORG_NAME || '', app: env.APP_NAME || 'WORMADI',
     });
@@ -205,6 +206,7 @@ async function api(req, env, url) {
     await db.batch([
       db.prepare('DELETE FROM settings WHERE key = ?').bind(key),
       db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(u.id),
+      db.prepare('DELETE FROM push_subs WHERE user_id = ?').bind(u.id),
     ]);
     await roomCall(env, '/kick', { userId: u.id });
     const s = await createSession(db, u.id, !!b.remember);
@@ -218,7 +220,10 @@ async function api(req, env, url) {
   if (me.must_change && !['/api/me', '/api/me/password', '/api/logout'].includes(p)) return fail(403, 'กรุณาตั้งรหัสผ่านใหม่ก่อนใช้งาน');
 
   if (p === '/api/logout' && m === 'POST') {
-    await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha256(bearer(req))).run();
+    await db.batch([
+      db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha256(bearer(req))),
+      db.prepare('DELETE FROM push_subs WHERE user_id = ?').bind(me.id),
+    ]);
     return json({ ok: true });
   }
   if (p === '/api/me' && m === 'GET') {
@@ -298,6 +303,19 @@ async function api(req, env, url) {
     await deleteChannel(db, id);
     await roomCall(env, '/reload');
     return json({ ok: true });
+  }
+
+  // ---------------------------------------------------------------- Web Push subscription (SOS alerts when the app is closed)
+  if (p === '/api/push' && m === 'POST') {
+    const sub = (await readJson(req)).subscription || {};
+    const endpoint = str(sub.endpoint, 1000);
+    if (!/^https:\/\//.test(endpoint)) return fail(400, 'subscription ไม่ถูกต้อง');
+    await db.batch([
+      db.prepare('DELETE FROM push_subs WHERE user_id = ? AND endpoint != ?').bind(me.id, endpoint),   // one device per account
+      db.prepare('INSERT OR REPLACE INTO push_subs (endpoint, user_id, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(endpoint, me.id, str(sub.keys?.p256dh, 200), str(sub.keys?.auth, 100), Date.now()),
+    ]);
+    return json({ ok: true, ready: pushReady(env) });
   }
 
   // ---------------------------------------------------------------- บันทึก / เตือน (only the owner sees them)
@@ -468,7 +486,11 @@ async function api(req, env, url) {
                   reporter: me.name, reporter_dept: me.dept, user_id: me.id, status: 'open', acks: 0 };
     await db.prepare('INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, NULL, ?, ?, ?, ?)')
       .bind(sos.ts, 'sos', `แจ้งเหตุฉุกเฉิน: ${sos.kind_name}`, `${me.name} (${me.dept || '-'})${sos.place ? ' · ' + sos.place : ''}`, `sos:${sos.id}`).run();
-    const { delivered } = await roomCall(env, '/broadcast', { msg: { type: 'sos', sos } });
+    const [{ delivered }, push] = await Promise.all([
+      roomCall(env, '/broadcast', { msg: { type: 'sos', sos } }),
+      pushAll(env, { exceptUserId: me.id }).catch(e => { console.error('sos push', e); return { sent: 0 }; }),
+    ]);
+    sos.pushed = push.sent || 0;
     return json({ ...sos, delivered });
   }
   if (seg[1] === 'sos' && id && seg[3] === 'ack' && m === 'POST') {

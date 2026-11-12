@@ -378,6 +378,51 @@ test('บันทึก / เตือน: ส่วนตัว, ถึงเ�
   a.close(); b.close();
 });
 
+test('ผู้สร้างกลุ่มนำคนออก: ถูกตัดออกทันที กลับเข้าไม่ได้จนกว่าจะเชิญ · คนที่ไม่ใช่ผู้สร้างนำออกไม่ได้', async () => {
+  const id = async tk => (await call('GET', '/api/me', tk)).body.user.id;
+  const ib = await id(T['แชทB']);
+  const room = await call('POST', '/api/channels', T['แชทA'], { name: 'กลุ่มนำออกทดสอบ' });
+  const a = await client(T['แชทA'], 'กลุ่มนำออกทดสอบ'), b = await client(T['แชทB'], 'กลุ่มนำออกทดสอบ'), c = await client(T['แชทC'], 'กลุ่มนำออกทดสอบ');
+  c.send(JSON.stringify({ type: 'kick', to: ib, channel: 'กลุ่มนำออกทดสอบ' }));
+  assert.equal((await c.wait('error')).code, 'kick', 'คนที่ไม่ใช่ผู้สร้างนำออกไม่ได้');
+  a.send(JSON.stringify({ type: 'kick', to: ib, channel: 'กลุ่มนำออกทดสอบ' }));
+  assert.equal((await b.wait('kicked')).channel, 'กลุ่มนำออกทดสอบ');
+  assert.equal((await a.wait('kick_done')).to, ib);
+  b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: 'กลุ่มนำออกทดสอบ' }));
+  assert.equal((await b.wait('error')).code, 'banned', 'กลับเข้าเองไม่ได้');
+  assert.equal((await b.wait('joined')).channel, null, 'ถูกปฏิเสธ = ยังไม่อยู่กลุ่มไหน');
+  a.send(JSON.stringify({ type: 'invite', to: ib, channel: 'กลุ่มนำออกทดสอบ' }));
+  await b.wait('invite');
+  b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: 'กลุ่มนำออกทดสอบ' }));
+  assert.equal((await b.wait('joined')).channel, 'กลุ่มนำออกทดสอบ', 'เชิญแล้วเข้าได้อีก');
+  b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: '' }));
+  assert.equal((await b.wait('joined')).channel, null, 'ออกจากกลุ่มได้ (ยังเชื่อมต่ออยู่)');
+  a.close(); b.close(); c.close();
+  await call('DELETE', '/api/channels/' + room.body.id, T['แชทA']);
+});
+
+test('SOS แม้ไม่อยู่ในกลุ่มไหนก็ได้รับ · ลงทะเบียนแจ้งเตือน (push) และลบเมื่อออกจากระบบ / เข้าเครื่องใหม่', async () => {
+  const w = new (require(require('path').join(__dirname, '..', '..', 'server', 'node_modules', 'ws')))(base.replace(/^http/, 'ws'));
+  w.msgs = []; w.on('message', d => w.msgs.push(JSON.parse(d)));
+  await new Promise(r => w.on('open', r));
+  w.send(JSON.stringify({ type: 'join', token: T.B }));          // signed in, no group
+  for (let k = 0; k < 300 && !w.msgs.some(m => m.type === 'joined'); k++) await sleep(10);
+  const s = await call('POST', '/api/sos', T.A, { place: 'ทดสอบ push' });
+  assert.equal(s.status, 200);
+  for (let k = 0; k < 300 && !w.msgs.some(m => m.type === 'sos'); k++) await sleep(10);
+  assert.ok(w.msgs.some(m => m.type === 'sos'), 'คนที่ไม่อยู่ในกลุ่มก็ได้ยิน SOS');
+  w.close();
+  const cfg = (await call('GET', '/api/config')).body;
+  assert.ok('push' in cfg && 'vapidPublic' in cfg);
+  const lg = await call('POST', '/api/login', null, { emp: 't-solo', password: 'pass-t-solo' });
+  const sub = { endpoint: 'https://push.example.test/abc', keys: { p256dh: 'x', auth: 'y' } };
+  assert.equal((await call('POST', '/api/push', lg.body.token, { subscription: sub })).status, 200);
+  assert.equal((await call('POST', '/api/push', lg.body.token, { subscription: { endpoint: 'javascript:x' } })).status, 400);
+  await call('POST', '/api/logout', lg.body.token);
+  const lg2 = await call('POST', '/api/login', null, { emp: 't-solo', password: 'pass-t-solo' });
+  assert.equal(lg2.status, 200);
+});
+
 (async () => {
   let fail = 0;
   for (const [n, f] of tests) {
