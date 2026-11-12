@@ -1893,7 +1893,6 @@ ROUTES.settings = () => {
     </div>
     <div class="list">
       ${row('sInvite', 'qr', 'เชิญเพื่อนร่วมทีม', 'แสดง QR ให้สแกนเปิดแอป')}
-      ${row('sHist', 'history', 'ประวัติการสื่อสาร')}
       ${row('sMembers', 'team', 'สมาชิกทีมงาน')}
       ${lead ? row('sReport', 'chart', 'รายงานการใช้งาน') : ''}
       ${lead ? row('sLog', 'download', 'Log ละเอียด / ส่งออก CSV') : ''}
@@ -1911,7 +1910,7 @@ ROUTES.settings = () => {
     on('sLang', () => toast('ตอนนี้รองรับภาษาไทย'));
     on('sTheme', () => { applyTheme(curTheme() === 'dark' ? 'light' : 'dark', true); render(); });
     on('sInstall', doInstall); on('sBatt', () => WN.openBatterySettings());
-    on('sInvite', invite); on('sHist', () => go('history')); on('sMembers', () => ACC() ? go('members') : toast('ใช้ได้เมื่อใช้เซิร์ฟเวอร์ Cloudflare'));
+    on('sInvite', invite); on('sMembers', () => ACC() ? go('members') : toast('ใช้ได้เมื่อใช้เซิร์ฟเวอร์ Cloudflare'));
     on('sReport', () => go('report')); on('sLog', () => { location.href = (serverBase || '') + '/log.html'; }); on('sAdmin', () => go('admin'));
     on('sHelp', help); on('sAbout', about);
     on('sOut', () => { if (confirm('ออกจากระบบ?')) signOut(); });
