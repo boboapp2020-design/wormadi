@@ -37,6 +37,7 @@
     "CHANNELS": "โรงงาน (ทั้งหมด)|ผลิตน้ำตาล|โรงไฟฟ้า|คลังสินค้า|ซ่อมบำรุง|รปภ.",
     "MAX_TALK_MS": "60000",
     "LOG_RETENTION_DAYS": "3",
+    "CHAT_RETENTION_HOURS": "24",
     "RECORDING_RETENTION_DAYS": "3"
   }
   // บัญชีพนักงานอยู่ในตาราง users (สร้างคนแรกด้วย: node scripts/create-user.js --emp admin --name "ผู้ดูแลระบบ" --role admin)

@@ -23,6 +23,16 @@ const SOS_KINDS = { general: 'เหตุฉุกเฉิน', fire: 'เพ�
 const ICONS = ['star', 'gear', 'bolt', 'box', 'tools', 'flask', 'shield', 'factory', 'truck', 'building', 'radio', 'users', 'pin', 'drop', 'fire'];
 const COLORS = ['gold', 'green', 'yellow', 'purple', 'orange', 'blue', 'red', 'teal', 'gray'];
 
+/** typed chat (group + private) is kept CHAT_RETENTION_HOURS (default 24) */
+async function cleanChat(env) {
+  const cut = Date.now() - (Number(env.CHAT_RETENTION_HOURS) || 24) * 3_600_000;
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM reactions WHERE msg_id IN (SELECT id FROM messages WHERE kind = 'text' AND ts < ?)`).bind(cut),
+    env.DB.prepare(`DELETE FROM messages WHERE kind = 'text' AND ts < ?`).bind(cut),
+    env.DB.prepare(`DELETE FROM notifications WHERE kind = 'dm' AND ts < ?`).bind(cut),
+  ]);
+}
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -50,9 +60,13 @@ export default {
     return res;
   },
 
-  // ลบข้อมูลเก่าทุกวัน (cron ใน wrangler.jsonc)
+  // cleanup (cron in wrangler.jsonc)
   async scheduled(evt, env) {
-    if (evt && evt.cron === '* * * * *') return fireReminders(env);
+    if (evt && evt.cron === '* * * * *') {
+      if (new Date().getUTCMinutes() === 0) await cleanChat(env);   // hourly
+      return fireReminders(env);
+    }
+    await cleanChat(env);
     const day = 86_400_000, now = Date.now();
     await env.DB.prepare('DELETE FROM reminders WHERE done_at IS NOT NULL AND done_at < ?').bind(now - 30 * day).run();
     const cutoff = now - (Number(env.LOG_RETENTION_DAYS) || 90) * day;

@@ -1322,7 +1322,7 @@ ROUTES.dm = async p => {
   let msgs = [];
   try { msgs = (await api(`/api/messages?channel=${encodeURIComponent(ch)}&limit=100`)).msgs; } catch (e) { if ($('dmMsgs')) $('dmMsgs').innerHTML = `<div class="sys">${esc(e.message)}</div>`; return; }
   const box = $('dmMsgs'); if (!box || S.dmOpen !== ch) return;
-  box.innerHTML = msgs.length ? msgs.map(msgHtml).join('') : `<div class="sys">เริ่มคุยกับ ${esc(peer.name)} ได้เลย · ข้อความเก็บไว้ 3 วัน</div>`;
+  box.innerHTML = msgs.length ? msgs.map(msgHtml).join('') : `<div class="sys">เริ่มคุยกับ ${esc(peer.name)} ได้เลย · ข้อความเก็บไว้ 24 ชม.</div>`;
   loadAvatars(box); box.scrollTop = box.scrollHeight;
 };
 function addDmMsg(msg) {
@@ -1966,7 +1966,7 @@ function about() {
   sheet(`<div style="text-align:center"><img class="appicon-img" src="brand/app-icon.png" alt="" style="width:84px;height:84px;margin:6px auto">
     <img class="wordmark-img" src="brand/wordmark.png" alt="WORMADI" style="margin:6px auto 0"><div class="muted">Walkie Talkie สำหรับทีมงานโรงงาน · เวอร์ชัน 2.1</div>
     <div style="margin:12px 0">${orgLogo()}</div><div style="font-weight:600">${esc(S.config.org)}</div>
-    <p class="small muted">เสียงและข้อความเก็บ 3 วัน แล้วลบอัตโนมัติ</p></div>`);
+    <p class="small muted">แชทเก็บ 24 ชม. · เสียงเก็บ 3 วัน แล้วลบอัตโนมัติ</p></div>`);
 }
 
 // ---------------------------------------------------------------- 15 admin
