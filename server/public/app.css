@@ -412,8 +412,32 @@ input.masked.show { -webkit-text-security: none; text-security: none; }
 .prof .bigav .av { --ring:5px; --gap:3px; box-shadow:0 6px 16px rgba(11,58,140,.35); }
 .prof .bigav .cam { z-index:2; }
 
-/* ---- room card = drop-down: a transparent <select> over the card opens the phone's own picker */
-.chcard { position:relative; cursor:pointer; }
-.chcard select.chsel { position:absolute; inset:0; width:100%; height:100%; opacity:0; border:0; cursor:pointer; font-size:16px; -webkit-appearance:none; appearance:none; }
-.chcard:has(select:disabled) { cursor:default; }
-.chcard:focus-within { outline:3px solid var(--focus, #ffb020); outline-offset:2px; }
+
+/* ---- room drop-down (in-app, follows the talk screen's colors) */
+.chwrap { position:relative; }
+.chcard { cursor:pointer; font:inherit; }
+.chcard:disabled { cursor:default; opacity:.85; }
+.chcard .chdd { display:grid; place-items:center; flex:none; }
+.chcard .chdd svg { width:26px; height:26px; transition:transform .18s; }
+.chcard.open { border-color:rgba(255,255,255,.5); box-shadow:0 0 0 2px rgba(255,176,32,.55); }
+.chcard.open .chdd svg { transform:rotate(180deg); }
+.chcard:focus-visible { outline:3px solid #ffb020; outline-offset:2px; }
+.chmenu { position:absolute; z-index:30; left:18px; right:18px; top:calc(100% + 6px); max-height:min(58vh, 440px); overflow:auto; overscroll-behavior:contain;
+  padding:6px; border-radius:20px; color:var(--on-ptt-page);
+  background:color-mix(in srgb, var(--ptt-card) 86%, #000); border:1px solid rgba(255,255,255,.28);
+  box-shadow:0 20px 44px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.12); }
+.chmenu.hidden { display:none; }
+.chhead { padding:10px 12px 4px; font-size:13px; font-weight:600; letter-spacing:.02em; color:var(--ptt-page-muted); }
+.chopt { display:flex; align-items:center; gap:12px; width:100%; min-height:54px; padding:8px 10px; border:0; border-radius:14px; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.chopt .ic { width:38px; height:38px; flex:none; }
+.chopt .ic svg { width:20px; height:20px; }
+.chopt b { display:block; font-size:16px; font-weight:600; line-height:1.25; }
+.chopt small { display:block; font-size:13px; color:var(--ptt-page-muted); line-height:1.3; }
+.chopt:hover, .chopt:focus-visible { background:rgba(255,255,255,.10); outline:none; }
+.chopt:active { background:rgba(255,255,255,.16); }
+.chopt.on { background:rgba(255,255,255,.14); box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.42); }
+.chopt .chck { color:#ffb020; display:grid; place-items:center; flex:none; }
+.chopt .chck svg { width:24px; height:24px; }
+.chopt .chlock { color:#ffd166; display:grid; place-items:center; flex:none; }
+.chopt .chlock svg { width:18px; height:18px; }
+.chsep { height:1px; margin:6px 8px; background:rgba(255,255,255,.18); }

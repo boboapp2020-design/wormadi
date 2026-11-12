@@ -292,18 +292,22 @@ function joinNow(channel) {
   if (NATIVE) return WN.switchChannel({ channel: ch });
   sendMsg({ type: 'join', token: S.token || undefined, name: S.profile.name, dept: S.profile.dept, uid: S.uid, channel: ch, rooms: ACC() ? roomsWith(ch) : undefined });
 }
-/** drop-down options: my rooms first, then the other rooms, then create / see all */
-function roomOptionsHtml() {
+/** the room drop-down: my rooms first, then the other rooms, then create / see all */
+function roomMenuHtml() {
   const cur = (S.me && S.me.channel) || '';
   const mine = ((S.me && S.me.rooms) || [cur]).filter(r => r && !isDm(r));
   if (cur && !isDm(cur) && !mine.includes(cur)) mine.unshift(cur);
-  const lab = n => { const c = S.channels.find(x => x.name === n), cnt = S.counts[n]; return `${c && c.locked ? '🔒 ' : ''}${roomLabel(n)}${cnt != null ? ` · ${cnt} คน` : ''}`; };
-  const opt = n => `<option value="${esc(n)}" ${n === cur ? 'selected' : ''}>${esc(lab(n))}</option>`;
+  const row = n => {
+    const c = S.channels.find(x => x.name === n) || chanInfo(n), cnt = S.counts[n], on = n === cur;
+    return `<button type="button" class="chopt ${on ? 'on' : ''}" role="option" aria-selected="${on}" data-v="${esc(n)}">${chanIcon(c)}<span class="grow"><b class="ell">${esc(roomLabel(n))}</b><small>${cnt != null ? cnt + ' คนออนไลน์' : '&nbsp;'}</small></span>${c.locked && !c.access ? `<span class="chlock" title="มีรหัส">${icon('lock')}</span>` : ''}${on ? `<span class="chck">${icon('check')}</span>` : ''}</button>`;
+  };
   const others = S.channels.filter(c => !mine.includes(c.name) && !isDm(c.name));
-  return (cur ? '' : '<option value="" selected disabled>เลือกห้อง…</option>')
-    + (mine.length ? `<optgroup label="ห้องของฉัน">${mine.map(opt).join('')}</optgroup>` : '')
-    + (others.length ? `<optgroup label="ห้องอื่น">${others.map(c => opt(c.name)).join('')}</optgroup>` : '')
-    + '<optgroup label="อื่น ๆ"><option value="__new">＋ สร้างห้องใหม่…</option><option value="__all">☰ ดูห้องทั้งหมด…</option></optgroup>';
+  const head = t => `<div class="chhead">${t}</div>`;
+  return (mine.length ? head('ห้องของฉัน') + mine.map(row).join('') : '')
+    + (others.length ? head('ห้องอื่น') + others.map(c => row(c.name)).join('') : '')
+    + `<div class="chsep"></div>
+       <button type="button" class="chopt act" role="option" data-v="__new"><span class="ic c-blue">${icon('plus')}</span><span class="grow"><b>สร้างห้องใหม่</b></span></button>
+       <button type="button" class="chopt act" role="option" data-v="__all"><span class="ic c-gray">${icon('team')}</span><span class="grow"><b>ดูห้องทั้งหมด</b></span></button>`;
 }
 /** just change which of my rooms I talk into */
 function setTalkRoom(name) { if (!S.me || S.me.channel === name) return; stopTalking(true); joinNow(name); }
@@ -938,9 +942,10 @@ ROUTES.ptt = () => {
       <button class="ib" id="spk" aria-label="${S.prefs.speaker ? 'ปิดเสียงลำโพง' : 'เปิดเสียงลำโพง'}">${icon(S.prefs.speaker ? 'volume' : 'mute')}</button></header>
     <div class="hearbar hidden" id="hearBar" role="status" aria-live="polite"></div>
     <div class="lbl2">พูดเข้าห้อง</div>
-    <div class="chcard" id="chPick">${ch ? chanIcon(ch) : `<span class="ic">${icon('radio')}</span>`}
-      <span class="grow"><b class="ell">${esc(ch ? (ch.dm ? ch.name : roomLabel(S.me.channel)) : S.me ? 'เลือกห้อง' : 'กำลังเชื่อมต่อ…')}</b><small>${icon('user')}<span data-chcount></span></small></span>${icon('down')}
-      <select class="chsel" id="chSel" aria-label="เลือกห้องที่จะพูด" ${!S.me || (ch && ch.dm) ? 'disabled' : ''}>${roomOptionsHtml()}</select></div>
+    <div class="chwrap">
+      <button class="chcard" id="chPick" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="chMenu" aria-label="เลือกห้องที่จะพูด" ${!S.me || (ch && ch.dm) ? 'disabled' : ''}>${ch ? chanIcon(ch) : `<span class="ic">${icon('radio')}</span>`}
+        <span class="grow"><b class="ell">${esc(ch ? (ch.dm ? ch.name : roomLabel(S.me.channel)) : S.me ? 'เลือกห้อง' : 'กำลังเชื่อมต่อ…')}</b><small>${icon('user')}<span data-chcount></span></small></span><span class="chdd">${icon('down')}</span></button>
+      <div class="chmenu hidden" id="chMenu" role="listbox" aria-label="เลือกห้องที่จะพูด">${roomMenuHtml()}</div></div>
     <button class="btn primary unlock hidden" id="unlockBtn" type="button" style="width:auto;margin-top:10px">${icon('volume')}แตะเพื่อเปิดเสียง</button>
     <div class="pttstage">
       <button class="ptt" id="pttBig" data-ptt type="button" aria-describedby="pttStatus"></button>
@@ -958,15 +963,30 @@ ROUTES.ptt = () => {
   </div>`, root => {
     bindBack(root);
     bindPtt($('pttBig'));
-    const sel = $('chSel');
-    if (sel) sel.onchange = () => {
-      const v = sel.value, cur = S.me && S.me.channel || '';
-      sel.value = cur;                                   // the card changes only once the server confirms
+    const card = $('chPick'), menu = $('chMenu');
+    const setOpen = o => { menu.classList.toggle('hidden', !o); card.setAttribute('aria-expanded', String(o)); card.classList.toggle('open', o); if (o) { const on = menu.querySelector('.chopt.on'); if (on) on.scrollIntoView({ block: 'nearest' }); } };
+    card.onclick = () => { if (!card.disabled) setOpen(menu.classList.contains('hidden')); };
+    for (const b of $$('.chopt', menu)) b.onclick = () => {
+      const v = b.dataset.v, cur = (S.me && S.me.channel) || '';
+      setOpen(false);
       if (v === '__new') return createRoomSheet('ptt');
       if (v === '__all') return go('channels', { then: 'ptt' });
       if (!v || v === cur) return;
       if ((S.me.rooms || []).includes(v)) setTalkRoom(v); else enterRoom(v, 'ptt');
     };
+    if (S._chOff) S._chOff();                                   // one set of listeners at a time
+    const outside = e => { if (!menu.isConnected) return S._chOff && S._chOff(); if (!e.target.closest('#chMenu, #chPick')) setOpen(false); };
+    const keys = e => {
+      if (menu.classList.contains('hidden')) return;
+      if (e.key === 'Escape') { setOpen(false); card.focus(); return; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const items = [...menu.querySelectorAll('.chopt')], i = items.indexOf(document.activeElement);
+        items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+      }
+    };
+    document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', keys);
+    S._chOff = () => { document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', keys); S._chOff = null; };
     $('toChat').onclick = () => go('chat');
     if ($('hangUp')) $('hangUp').onclick = () => { endCall(); toast('วางสายแล้ว'); };
     if ($('shareRoom')) $('shareRoom').onclick = () => shareRoom(ch);
