@@ -889,7 +889,7 @@ ROUTES.setpw = () => {
 ROUTES.home = () => {
   const u = S.user || { name: S.profile.name, dept: S.profile.dept };
   const online = S.roster ? S.roster.length : Object.values(S.counts).reduce((a, b) => a + (b || 0), 0);
-  mount(`<div class="page"><div class="scroll">
+  mount(`<div class="page"><div class="scroll homefit">
     <div class="home-top"><button type="button" id="homeAv" aria-label="เปลี่ยนรูปโปรไฟล์" style="background:none;border:0;padding:0;cursor:pointer">${avatar(S.user || u)}</button>
       <div class="grow"><div class="hi">สวัสดี</div><div class="nm ell">${esc(u.name)}</div><div class="dp ell">${esc(u.dept || '')}</div></div>
       <button class="ib" id="bell" aria-label="การแจ้งเตือน">${icon('bell')}<span class="badge hidden" id="bellBadge"></span></button>
