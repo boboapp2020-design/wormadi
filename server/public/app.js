@@ -281,11 +281,29 @@ function joinRaw(ch) {
   if (NATIVE) return WN.switchChannel({ channel: ch });
   sendMsg({ type: 'join', token: S.token || undefined, name: S.profile.name, dept: S.profile.dept, uid: S.uid, channel: ch });
 }
+// several rooms at once: "rooms" = the rooms I hear; "channel" = the room my push-to-talk goes to
+const LOBBY = 'ทุกคน';
+function savedRooms() { try { const r = JSON.parse(lsGet('walkie_rooms') || 'null'); return Array.isArray(r) && r.length ? r : [LOBBY]; } catch { return [LOBBY]; } }
+function saveRooms(r) { lsSet('walkie_rooms', JSON.stringify([...new Set(r.filter(x => x && !isDm(x)))])); }
+/** the rooms to be in when the talk room is "active" */
+function roomsWith(active) { const r = savedRooms(); if (active && !r.includes(active)) r.push(active); if (S.call && S.call.status === 'active' && !r.includes(S.call.channel)) r.push(S.call.channel); return r; }
 function joinNow(channel) {
   const ch = channel || (S.call && S.call.status === 'active' ? S.call.channel : '') || lsGet('walkie_channel') || '';
   if (NATIVE) return WN.switchChannel({ channel: ch });
-  sendMsg({ type: 'join', token: S.token || undefined, name: S.profile.name, dept: S.profile.dept, uid: S.uid, channel: ch });
+  sendMsg({ type: 'join', token: S.token || undefined, name: S.profile.name, dept: S.profile.dept, uid: S.uid, channel: ch, rooms: ACC() ? roomsWith(ch) : undefined });
 }
+function renderRoomChips() {
+  const box = $('roomChips'); if (!box || !S.me || !ACC()) return;
+  const rooms = (S.me.rooms || [S.me.channel]).filter(Boolean);
+  const talkingIn = new Set((S.roster || []).filter(u => u.talking).flatMap(u => u.rooms || []));
+  box.innerHTML = '<span class="small">ฟังอยู่ ' + rooms.length + ' ห้อง:</span>' + rooms.map(r => `<button type="button" class="rchip ${r === S.me.channel ? 'on' : ''}" data-room="${esc(r)}" aria-pressed="${r === S.me.channel}">${S.hearing && S.hearing.channel === r ? '🔊 ' : ''}${esc(roomLabel(r))}${r === S.me.channel ? ' · พูด' : ''}</button>`).join('')
+    + '<button type="button" class="rchip add" data-room-add>+ เพิ่มห้อง</button>';
+  for (const b of $$('[data-room]', box)) b.onclick = () => setTalkRoom(b.dataset.room);
+  const add = box.querySelector('[data-room-add]'); if (add) add.onclick = () => go('channels', { then: 'ptt' });
+}
+/** just change which of my rooms I talk into */
+function setTalkRoom(name) { if (!S.me || S.me.channel === name) return; stopTalking(true); joinNow(name); }
+const roomLabel = ch => (isDm(ch) ? 'ส่วนตัว' : ch === LOBBY ? 'ทุกคน (ห้องรวม)' : ch || '');
 window.addEventListener('online', () => { if (!stopped && !NATIVE && (!ws || ws.readyState > 1)) { attempt = 0; connect(); } });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
@@ -316,6 +334,11 @@ function onMessage(m) {
     case 'joined': {
       const changed = !S.me || S.me.channel !== m.channel;
       S.me = m; attempt = 0; setConn('online');
+      if (ACC() && Array.isArray(m.rooms)) {
+        saveRooms(m.rooms);
+        const want = roomsWith(m.channel);
+        if (NATIVE && want.some(r => !m.rooms.includes(r)) && !S.roomSync) { S.roomSync = true; sendMsg({ type: 'join', channel: m.channel, rooms: want }); setTimeout(() => (S.roomSync = false), 3000); }
+      }
       if (m.channels && !S.channels.length) S.channels = m.channels.map(name => ({ name }));
       if (m.channel && !isDm(m.channel)) lsSet('walkie_channel', m.channel);
       if (changed) { S.chat.loadedFor = null; if (S.route === 'chat') renderChat(); }
@@ -328,7 +351,8 @@ function onMessage(m) {
     }
     case 'channels': loadChannels().then(() => ['channels', 'home', 'ptt', 'convos'].includes(S.route) && !$('sheet') && render()); break;
     case 'state':
-      S.state = m;
+      (S.states ||= {})[m.channel] = m;
+      if (!S.me || !m.channel || m.channel === S.me.channel) S.state = m;
       if (!S.roster) S.counts[m.channel] = m.users.length;
       renderTalk();
       break;
@@ -344,11 +368,18 @@ function onMessage(m) {
       talking = true; beep(880, 0.08); vibrate(40); renderTalk(); break;
     case 'busy':
       if (!NATIVE) { beep(220, 0.25); vibrate([60, 40, 60]); }
-      toast(`${m.by} กำลังพูดอยู่ รอสักครู่`); break;
+      toast(`${m.by} กำลังพูดอยู่ในห้อง ${roomLabel(m.channel || S.me?.channel)} รอสักครู่`); break;
     case 'talk_start':
+      S.hearing = { name: m.name, channel: m.channel || (S.me && S.me.channel) };
       if (!NATIVE) { rxRate = m.rate || TARGET_RATE; playHead = 0; beep(660, 0.06); }
+      renderTalk();
+      if (document.hidden && S.hearing.channel !== S.me?.channel) systemNotify(`🔊 ${m.name}`, `พูดในห้อง ${roomLabel(S.hearing.channel)}`, 'talk');
+      break;
+    case 'talk_also':             // someone talks in another of my rooms while I hear a different one
+      if (!S.alsoAt || Date.now() - S.alsoAt > 4000) { S.alsoAt = Date.now(); toast(`${m.name} กำลังพูดในห้อง ${roomLabel(m.channel)} ด้วย (ได้ยินทีละห้อง)`); }
       break;
     case 'talk_end':
+      if (S.hearing && S.hearing.name === m.name && (!m.channel || S.hearing.channel === m.channel)) { S.hearing = null; renderTalk(); }
       if (!S.me) break;
       if (!NATIVE && m.name !== S.me.name) beep(520, 0.1);
       if (m.reason === 'timeout' && m.name === S.me.name) toast('พูดได้สูงสุด 60 วินาทีต่อครั้ง');
@@ -493,19 +524,25 @@ function stopTalking(silent) {
   talking = false; setMeter(0); renderTalk();
 }
 function renderTalk() {
-  const t = S.state.talker, mine = talking && S.me && t === S.me.name, other = !!t && !mine;
+  const st0 = S.state.talker, mine = talking && S.me && st0 === S.me.name;
+  const h = S.hearing && !mine ? S.hearing : (!mine && st0 ? { name: st0, channel: S.me && S.me.channel } : null);
+  const t = h ? h.name : st0, other = !!h;
+  const where = h && h.channel ? roomLabel(h.channel) : '';
   for (const b of $$('[data-ptt]')) { b.classList.toggle('talking', mine); b.classList.toggle('listening', other); }
   const big = $('pttBig');
-  if (big) big.innerHTML = `${icon('mic')}<b>${mine ? 'กำลังพูด' : other ? 'กำลังรับฟัง' : wantTalk ? 'รอสักครู่…' : 'กดค้างเพื่อพูด'}</b><small>${mine ? 'ปล่อยเพื่อจบ' : other ? esc(t) : S.prefs.mode === 'toggle' ? 'แตะเพื่อเริ่ม / แตะอีกครั้งเพื่อจบ' : ''}</small>`;
+  if (big) big.innerHTML = `${icon('mic')}<b>${mine ? 'กำลังพูด' : other ? 'กำลังรับฟัง' : wantTalk ? 'รอสักครู่…' : 'กดค้างเพื่อพูด'}</b><small>${mine ? 'ปล่อยเพื่อจบ' : other ? esc(t) + (where ? '<br>ห้อง ' + esc(where) : '') : S.prefs.mode === 'toggle' ? 'แตะเพื่อเริ่ม / แตะอีกครั้งเพื่อจบ' : ''}</small>`;
   const st = $('pttStatus');
   if (st) {
     const on = S.conn === 'online';
     st.innerHTML = mine ? `<span class="dot" style="background:#ff6b6b;color:#ff6b6b"></span>กำลังส่งเสียง...`
-      : other ? `<span class="dot on" style="color:var(--online)"></span>กำลังรับฟัง: ${esc(t)}`
+      : other ? `<span class="dot on" style="color:var(--online)"></span>กำลังรับฟัง: <b>${esc(t)}</b>${where ? ` · ห้อง <b>${esc(where)}</b>` : ''}`
       : on ? `<span class="dot on" style="background:var(--online);color:var(--online)"></span>พร้อมรับการสื่อสาร` : `<span class="dot warn" style="color:#f59e0b"></span>กำลังเชื่อมต่อ…`;
   }
   const cnt = S.me && S.me.channel ? (S.counts[S.me.channel] ?? S.state.users.length) : 0;
   for (const el of $$('[data-chcount]')) el.textContent = `${cnt} คนออนไลน์`;
+  const hb = $('hearBar');
+  if (hb) { hb.classList.toggle('hidden', !other); if (other) hb.innerHTML = `${icon('volume')}<span><b>${esc(t)}</b> กำลังพูด${where ? ` · ห้อง <b>${esc(where)}</b>` : ''}</span>`; }
+  renderRoomChips();
   updateMediaSession();
 }
 const levels = new Array(48).fill(0);
@@ -896,9 +933,11 @@ ROUTES.ptt = () => {
   mount(`<div class="pttpage">
     <header class="hd safe-top"><button class="ib" data-back aria-label="กลับ">${icon('back')}</button><h1>Walkie Talkie</h1>
       <button class="ib" id="spk" aria-label="${S.prefs.speaker ? 'ปิดเสียงลำโพง' : 'เปิดเสียงลำโพง'}">${icon(S.prefs.speaker ? 'volume' : 'mute')}</button></header>
-    <div class="lbl2">ห้องสื่อสารปัจจุบัน</div>
+    <div class="hearbar hidden" id="hearBar" role="status" aria-live="polite"></div>
+    <div class="lbl2">ห้องที่จะพูด (กดค้างแล้วพูดเข้าห้องนี้)</div>
     <button class="chcard" id="chPick">${ch ? chanIcon(ch) : `<span class="ic">${icon('radio')}</span>`}
       <span class="grow"><b class="ell">${esc(ch ? ch.name : S.me ? 'ยังไม่ได้เข้าห้อง – แตะเพื่อเลือก/สร้างห้อง' : 'กำลังเชื่อมต่อ…')}</b><small>${icon('user')}<span data-chcount></span></small></span>${icon('down')}</button>
+    <div class="roomchips" id="roomChips" aria-label="ห้องที่ฟังอยู่"></div>
     <button class="btn primary unlock hidden" id="unlockBtn" type="button" style="width:auto;margin-top:10px">${icon('volume')}แตะเพื่อเปิดเสียง</button>
     <div class="pttstage">
       <button class="ptt" id="pttBig" data-ptt type="button" aria-describedby="pttStatus"></button>
@@ -946,13 +985,15 @@ ROUTES.channels = p => {
       const list = S.channels.filter(c => (tab !== 'fav' || S.favs.includes(c.name)) && (!q || c.name.toLowerCase().includes(q) || (c.sub || '').toLowerCase().includes(q)));
       $('chList').innerHTML = list.length ? list.map(c => {
         const cur = S.me && S.me.channel === c.name, fav = S.favs.includes(c.name);
+        const member = !!(S.me && (S.me.rooms || [S.me.channel]).includes(c.name));
+        const canLeave = member && (!c.lobby || (S.me.rooms || []).filter(r => !isDm(r)).length > 1);
         const lock = c.locked ? `<span title="มีรหัส" style="color:${c.access ? 'var(--muted)' : 'var(--err-fg)'}">${icon('lock')}</span>` : '';
         return `<div class="li" role="button" tabindex="0" data-ch="${esc(c.name)}">${chanIcon(c)}
-          <div class="grow"><div class="t1 ell">${esc(c.name)} ${lock}</div><div class="t2 ell">${icon('user')}${S.counts[c.name] || 0} คน${c.locked ? (c.access ? ' · มีรหัส (เข้าได้แล้ว)' : ' · มีรหัส') : ' · ห้องเปิด'}${c.creator_name ? ' · โดย ' + esc(c.creator_name) : ''}</div></div>
+          <div class="grow"><div class="t1 ell">${esc(c.name)} ${lock}${cur ? ' <span class="pill new">พูดห้องนี้</span>' : member ? ' <span class="pill">ฟังอยู่</span>' : ''}</div><div class="t2 ell">${icon('user')}${S.counts[c.name] || 0} คน${c.locked ? (c.access ? ' · มีรหัส (เข้าได้แล้ว)' : ' · มีรหัส') : ' · ห้องเปิด'}${c.creator_name ? ' · โดย ' + esc(c.creator_name) : ''}</div></div>
           ${c.lobby ? '' : `<button class="ib" data-share="${c.id}" aria-label="แชร์ห้อง ${esc(c.name)}" style="color:var(--primary-fg)">${icon('send')}</button>`}
           ${c.can_delete ? `<button class="ib" data-del="${c.id}" aria-label="ลบห้อง ${esc(c.name)}" style="color:var(--err-fg)">${icon('trash')}</button>` : ''}
           <button class="ib" data-fav="${esc(c.name)}" aria-label="${fav ? 'เอาออกจากรายการโปรด' : 'เพิ่มในรายการโปรด'}" style="color:${fav ? '#e0a100' : 'var(--nav-muted)'}">${icon(fav ? 'starf' : 'star')}</button>
-          ${cur && !c.lobby ? `<button class="btn sm" data-leave type="button" style="color:var(--err-fg)">ออก</button>` : `<span class="chev">${icon('chev')}</span>`}</div>`;
+          ${canLeave ? `<button class="btn sm" data-leave="${esc(c.name)}" type="button" style="color:var(--err-fg)">ออก</button>` : `<span class="chev">${icon('chev')}</span>`}</div>`;
       }).join('') : `<div class="empty">${tab === 'fav' ? 'ยังไม่มีรายการโปรด แตะ ☆ ที่ห้องเพื่อเพิ่ม' : q ? 'ไม่พบห้อง' : 'ยังไม่มีห้อง กด “สร้างห้องใหม่” เพื่อเริ่มคุยกับทีม'}</div>`;
       for (const r of $$('[data-ch]', root)) r.onclick = e => {
         if (e.target.closest('[data-fav],[data-del],[data-share],[data-leave]')) return;
@@ -963,7 +1004,7 @@ ROUTES.channels = p => {
         S.favs = S.favs.includes(n) ? S.favs.filter(x => x !== n) : [...S.favs, n];
         lsSet('walkie_favs', JSON.stringify(S.favs)); draw();
       };
-      for (const b of $$('[data-leave]', root)) b.onclick = () => leaveRoom();
+      for (const b of $$('[data-leave]', root)) b.onclick = () => leaveRoom(true, b.dataset.leave);
       for (const b of $$('[data-share]', root)) b.onclick = () => { const c = S.channels.find(x => String(x.id) === b.dataset.share); if (c) shareRoom(c); };
       for (const d of $$('[data-del]', root)) d.onclick = async () => {
         const c = S.channels.find(x => String(x.id) === d.dataset.del);
@@ -1087,16 +1128,20 @@ function confirmRoom(c, then) {
   });
 }
 /** leave the current group (stay signed in: SOS still rings) */
-function leaveRoom(ask = true) {
-  const ch = S.me && S.me.channel;
+function leaveRoom(ask = true, room) {
+  const ch = room || (S.me && S.me.channel);
   if (!ch) return;
   if (isDm(ch)) { endCall(); return; }
   const go2 = () => {
     closeSheet(); stopTalking(true);
-    lsSet('walkie_channel', '');
-    joinNow();                     // no channel -> the all-hands channel
-    toast(`ออกจากกลุ่ม “${ch}” แล้ว กลับมาห้องรวม (ทุกคน)`);
-    if (['ptt', 'chat'].includes(S.route)) go('home', {}, true); else render();
+    const left = savedRooms().filter(r => r !== ch);
+    if (!left.length) left.push(LOBBY);
+    saveRooms(left);
+    const active = S.me && S.me.channel !== ch ? S.me.channel : left.includes(LOBBY) ? LOBBY : left[0];
+    lsSet('walkie_channel', active === LOBBY ? '' : active);
+    joinNow(active);
+    toast(`ออกจากห้อง “${roomLabel(ch)}” แล้ว${S.me && S.me.channel === ch ? ` · พูดเข้าห้อง ${roomLabel(active)}` : ''}`);
+    if (S.route === 'chat') go('home', {}, true); else render();
   };
   if (!ask) return go2();
   sheet(`<div style="text-align:center"><h3>ออกจากกลุ่ม “${esc(ch)}” ?</h3>
@@ -1125,6 +1170,7 @@ function roomMembersSheet() {
 function enterRoom(name, then, opts = {}) {
   const c = S.channels.find(x => x.name === name);
   if (S.me && S.me.channel === name) { if (then) go(then, {}, true); return; }     // already here
+  if (S.me && (S.me.rooms || []).includes(name)) { setTalkRoom(name); if (then) go(then, {}, true); return; }   // already in it: talk there
   if (!opts.confirmed && c && !c.lobby) return confirmRoom(c, then);     // the all-hands channel needs no confirmation
   if (c && c.locked && !c.access) return askRoomPass(c, then);
   if (!S.me || S.me.channel !== name) { stopTalking(true); joinNow(name); }

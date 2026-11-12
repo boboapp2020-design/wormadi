@@ -351,3 +351,11 @@ video.scan { width:100%; border-radius:12px; background:#000; aspect-ratio:1; ob
 /* password shown as dots without being a "password" field (so phones don't offer saved accounts) */
 input.masked { -webkit-text-security: disc; text-security: disc; }
 input.masked.show { -webkit-text-security: none; text-security: none; }
+
+/* several rooms: chips of my rooms + "who is talking, in which room" */
+.roomchips { display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:6px; margin:10px 14px 0; color:var(--ptt-page-muted); }
+.rchip { border:1.5px solid rgba(255,255,255,.35); background:rgba(255,255,255,.08); color:#fff; border-radius:999px; padding:6px 12px; font:inherit; font-size:14px; cursor:pointer; min-height:34px; }
+.rchip.on { background:#fff; color:#0b3a8c; font-weight:700; border-color:#fff; }
+.rchip.add { border-style:dashed; }
+.hearbar { display:flex; align-items:center; justify-content:center; gap:8px; margin:8px 14px 0; padding:8px 12px; border-radius:14px; background:#17803d; color:#fff; font-size:15px; }
+.hearbar svg.i { width:20px; height:20px; flex:none; }

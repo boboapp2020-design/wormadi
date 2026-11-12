@@ -25,6 +25,7 @@ export class WalkieRoom extends DurableObject {
     this.maxTalkMs = Number(env.MAX_TALK_MS) || 60_000;
     this.talker = new Map(); // channel -> { ws, name, uid, since, timer, rate }
     this.rec = new Map();    // channel -> { chunks: ArrayBuffer[], bytes }
+    this.hearing = new Map(); // ws -> the room whose voice this listener hears now (one room at a time, no mixing)
     this.channels = null;    // names, loaded from D1 (or env.CHANNELS without a database)
     this.meta = new Map();   // name -> { id, locked, created_by }
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PING, PONG));
@@ -63,10 +64,16 @@ export class WalkieRoom extends DurableObject {
       await this.loadChannels(true);
       for (const ws of this.authed()) {
         const c = this.info(ws);
-        if (c.channel && !this.channels.includes(c.channel)) {   // room deleted: move people out
-          const gone = c.channel;
-          this.leave(ws);
-          this.send(ws, { type: 'error', code: 'room_deleted', channel: gone, message: `ห้อง "${gone}" ถูกลบแล้ว` });
+        const gone = this.roomsOf(c).filter(r => !r.startsWith('dm:') && !this.channels.includes(r));
+        if (gone.length) {                       // room deleted: take it out of this person's rooms
+          const keep = this.roomsOf(c).filter(r => !gone.includes(r));
+          let active = gone.includes(c.channel) ? (keep.find(r => !r.startsWith('dm:')) || LOBBY) : c.channel;
+          if (!keep.includes(active)) keep.unshift(active);
+          this.setInfo(ws, { ...c, channel: active, rooms: keep });
+          for (const g of gone) {
+            this.afterLeft(ws, c, g);
+            this.send(ws, { type: 'error', code: 'room_deleted', channel: g, message: `ห้อง "${g}" ถูกลบแล้ว` });
+          }
         }
         this.send(ws, { type: 'channels', channels: this.channels });
       }
@@ -91,7 +98,7 @@ export class WalkieRoom extends DurableObject {
       let n = 0;
       for (const ws of this.authed()) {
         const c = this.info(ws);
-        if ((only && only.has(c.uid)) || (channel && c.channel === channel) || (!only && !channel)) { this.send(ws, msg); n++; }
+        if ((only && only.has(c.uid)) || (channel && this.roomsOf(c).includes(channel)) || (!only && !channel)) { this.send(ws, msg); n++; }
       }
       return Response.json({ delivered: n });
     }
@@ -100,7 +107,7 @@ export class WalkieRoom extends DurableObject {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
-    this.setInfo(server, { cid: randomId(), uid: null, name: null, dept: '', role: 'user', channel: null, ok: !this.env.DB });
+    this.setInfo(server, { cid: randomId(), uid: null, name: null, dept: '', role: 'user', channel: null, rooms: [], ok: !this.env.DB });
     await this.ensureAlarm();
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -123,8 +130,10 @@ export class WalkieRoom extends DurableObject {
   info(ws) { try { return ws.deserializeAttachment(); } catch { return null; } }
   setInfo(ws, v) { ws.serializeAttachment(v); }
   authed() { return this.ctx.getWebSockets().filter(ws => this.info(ws)?.ok); }
-  members(ch) { return this.ctx.getWebSockets().filter(ws => this.info(ws)?.channel === ch); }
-  joinedAll() { return this.authed().filter(ws => this.info(ws).channel); }
+  /** the rooms this connection is in (old single-room clients: just their channel) */
+  roomsOf(c) { return c && Array.isArray(c.rooms) && c.rooms.length ? c.rooms : c && c.channel ? [c.channel] : []; }
+  members(ch) { return this.ctx.getWebSockets().filter(ws => this.roomsOf(this.info(ws)).includes(ch)); }
+  joinedAll() { return this.authed().filter(ws => this.roomsOf(this.info(ws)).length); }
   /** one entry per person (the same account may be open on two phones) */
   uniqueIn(ch) {
     const seen = new Map();
@@ -145,10 +154,12 @@ export class WalkieRoom extends DurableObject {
     const byId = new Map();
     for (const ws of all) {
       const c = this.info(ws);
-      byId.set(c.uid ?? `c${c.cid}`, { id: c.uid ?? c.cid, name: c.name, dept: c.dept, channel: c.channel && c.channel.startsWith('dm:') ? 'คุยส่วนตัว' : c.channel, talking: this.talker.get(c.channel)?.ws === ws });
+      const mask = r => (r && r.startsWith('dm:') ? 'คุยส่วนตัว' : r);
+      byId.set(c.uid ?? `c${c.cid}`, { id: c.uid ?? c.cid, name: c.name, dept: c.dept, channel: mask(c.channel), rooms: this.roomsOf(c).map(mask),
+        talking: this.roomsOf(c).some(r => this.talker.get(r)?.ws === ws) });
     }
     const users = [...byId.values()];
-    const msg = { type: 'roster', users, channels: (this.channels || []).map(name => ({ name, users: users.filter(u => u.channel === name).length })) };
+    const msg = { type: 'roster', users, channels: (this.channels || []).map(name => ({ name, users: users.filter(u => u.rooms.includes(name)).length })) };
     for (const ws of this.authed()) this.send(ws, msg);   // also people who are not in a room yet
   }
 
@@ -156,7 +167,7 @@ export class WalkieRoom extends DurableObject {
     for (const ws of this.members(ch)) this.send(ws, { type: 'chat', msg });
     if (this.meta.get(ch)?.locked || ch.startsWith('dm:')) return;     // never show locked / private messages to people outside
     const note = { type: 'notify', channel: ch, msg };
-    for (const ws of this.joinedAll()) if (this.info(ws).channel !== ch) this.send(ws, note);
+    for (const ws of this.joinedAll()) if (!this.roomsOf(this.info(ws)).includes(ch)) this.send(ws, note);
   }
 
   async releaseFloor(ch, reason = 'end') {
@@ -167,7 +178,10 @@ export class WalkieRoom extends DurableObject {
     const rec = this.rec.get(ch);
     this.rec.delete(ch);
     const ms = Date.now() - t.since;
-    for (const ws of this.members(ch)) this.send(ws, { type: 'talk_end', name: t.name, reason, ms });
+    for (const ws of this.members(ch)) {
+      if (this.hearing.get(ws) === ch) this.hearing.delete(ws);
+      this.send(ws, { type: 'talk_end', name: t.name, reason, ms, channel: ch });
+    }
     this.broadcastState(ch);
     this.broadcastRoster();
     this.log('talk', ch, t.name, ms, reason);
@@ -194,18 +208,25 @@ export class WalkieRoom extends DurableObject {
     this.publish(ch, msg);
   }
 
+  /** leave every room (disconnect / old "leave") */
   leave(ws) {
     const c = this.info(ws);
-    if (!c || !c.channel) return;
-    const ch = c.channel;
+    const rooms = this.roomsOf(c);
+    this.hearing.delete(ws);
+    if (!c || !rooms.length) return;
+    this.setInfo(ws, { ...c, channel: null, rooms: [] });
+    for (const ch of rooms) this.afterLeft(ws, c, ch);
+    this.broadcastRoster();
+    if (c.uid && this.env.DB) this.ctx.waitUntil?.(this.env.DB.prepare('UPDATE users SET last_seen = ? WHERE id = ?').bind(Date.now(), c.uid).run().catch(() => {}));
+  }
+  /** this connection is no longer in room ch (its attachment is already updated) */
+  afterLeft(ws, c, ch) {
     if (this.talker.get(ch)?.ws === ws) this.releaseFloor(ch, 'left');
-    this.setInfo(ws, { ...c, channel: null });
+    if (this.hearing.get(ws) === ch) this.hearing.delete(ws);
     if (ch.startsWith('dm:') && !this.uniqueIn(ch).some(o => o.uid === c.uid))
       for (const o of this.members(ch)) this.send(o, { type: 'call_end', by: c.name, channel: ch });
     this.broadcastState(ch);
-    this.broadcastRoster();
     this.log('leave', ch, c.name);
-    if (c.uid && this.env.DB) this.ctx.waitUntil?.(this.env.DB.prepare('UPDATE users SET last_seen = ? WHERE id = ?').bind(Date.now(), c.uid).run().catch(() => {}));
   }
 
   log(event, channel, name, ms = null, reason = null) {
@@ -245,7 +266,7 @@ export class WalkieRoom extends DurableObject {
     if (typeof data !== 'string') {
       const t = this.talker.get(me.channel);
       if (!t || t.ws !== ws) return;
-      for (const other of this.members(me.channel)) if (other !== ws) { try { other.send(data); } catch {} }
+      for (const other of this.members(me.channel)) if (other !== ws && this.hearing.get(other) === me.channel) { try { other.send(data); } catch {} }
       const r = this.rec.get(me.channel);
       if (r && r.bytes < (this.maxTalkMs / 1000 + 2) * 2 * (t.rate || 16000)) { r.chunks.push(data.slice(0)); r.bytes += data.byteLength; }
       return;
@@ -297,29 +318,47 @@ export class WalkieRoom extends DurableObject {
           this.broadcastRoster();
           break;
         }
-        const sameChannel = cur.channel === ch;
-        if (cur.channel && !sameChannel) this.leave(ws);
-        else if (sameChannel && this.talker.get(ch)?.ws === ws) await this.releaseFloor(ch, 'left');
-        const now = { ...this.info(ws), ok: true, uid, name, dept, role, devUid, channel: ch };
+        // rooms: old clients send one channel (= their only room); new clients also send "rooms" to stay in several
+        const rooms = [ch];
+        if (Array.isArray(msg.rooms) && this.env.DB) {
+          for (const r of msg.rooms.map(String).slice(0, 20)) {
+            if (rooms.includes(r)) continue;
+            const d = /^dm:(\d+):(\d+)$/.exec(r);
+            const ok = this.channels.includes(r) ? await this.canEnter(r, uid, role)
+              : !!(d && uid && Number(d[1]) < Number(d[2]) && [Number(d[1]), Number(d[2])].includes(uid));
+            if (ok) rooms.push(r);
+          }
+        }
+        const before = this.roomsOf(cur);
+        if (cur.channel && this.talker.get(cur.channel)?.ws === ws) await this.releaseFloor(cur.channel, 'left');   // switching / re-joining stops my talk
+        const now = { ...this.info(ws), ok: true, uid, name, dept, role, devUid, channel: ch, rooms };
         this.setInfo(ws, now);
-        this.send(ws, { type: 'joined', id: uid ?? now.cid, name, channel: ch, channels: this.channels, uid: devUid, emojis: EMOJIS });
-        this.broadcastState(ch);
+        for (const r of before) if (!rooms.includes(r)) this.afterLeft(ws, cur, r);
+        this.send(ws, { type: 'joined', id: uid ?? now.cid, name, channel: ch, rooms, channels: this.channels, uid: devUid, emojis: EMOJIS });
+        for (const r of rooms) {
+          if (!before.includes(r)) { this.broadcastState(r); this.log('join', r, name); }
+          else if (r === ch) this.broadcastState(r);
+        }
         this.broadcastRoster();
-        if (!sameChannel) this.log('join', ch, name);
         break;
       }
       case 'ptt_start': {
         if (!me.channel) return;
         const ch = me.channel;
         const t = this.talker.get(ch);
-        if (t && t.ws !== ws) return this.send(ws, { type: 'busy', by: t.name });
+        if (t && t.ws !== ws) return this.send(ws, { type: 'busy', by: t.name, channel: ch });
         if (t) clearTimeout(t.timer); // same talker asked again: restart the limit
         const timer = setTimeout(() => this.releaseFloor(ch, 'timeout'), this.maxTalkMs);
         const rate = Number(msg.rate) >= 8000 && Number(msg.rate) <= 48000 ? Number(msg.rate) : 16000;
         this.talker.set(ch, { ws, name: me.name, dept: me.dept, uid: me.uid, devUid: me.devUid, since: t ? t.since : Date.now(), timer, rate });
         if (!t) this.rec.set(ch, { chunks: [], bytes: 0 });
         this.send(ws, { type: 'talk_granted', maxMs: this.maxTalkMs });
-        for (const other of this.members(ch)) if (other !== ws) this.send(other, { type: 'talk_start', name: me.name, rate });
+        for (const other of this.members(ch)) {
+          if (other === ws) continue;
+          const h = this.hearing.get(other);
+          if (!h || h === ch || !this.talker.has(h)) { this.hearing.set(other, ch); this.send(other, { type: 'talk_start', name: me.name, rate, channel: ch }); }
+          else this.send(other, { type: 'talk_also', name: me.name, channel: ch, hearing: h });
+        }
         this.broadcastState(ch);
         this.broadcastRoster();
         break;
@@ -345,7 +384,14 @@ export class WalkieRoom extends DurableObject {
           const c = this.info(o);
           if (c.uid !== to) continue;
           name = c.name;
-          if (c.channel === ch) { this.leave(o); this.send(o, { type: 'kicked', channel: ch, by: me.name }); }
+          if (this.roomsOf(c).includes(ch)) {
+            const keep = this.roomsOf(c).filter(r => r !== ch);
+            let active = c.channel === ch ? (keep.find(r => !r.startsWith('dm:')) || LOBBY) : c.channel;
+            if (!keep.includes(active)) keep.unshift(active);
+            this.setInfo(o, { ...c, channel: active, rooms: keep });
+            this.afterLeft(o, c, ch);
+            this.send(o, { type: 'kicked', channel: ch, by: me.name });
+          }
         }
         this.send(ws, { type: 'kick_done', to, name, channel: ch });
         break;
@@ -401,8 +447,9 @@ export class WalkieRoom extends DurableObject {
         const now = Date.now();
         if (me.lastChat && now - me.lastChat < 300) return; // flood guard
         this.setInfo(ws, { ...me, lastChat: now });
-        const m = await this.store({ channel: me.channel, kind: 'text', name: me.name, dept: me.dept, uid: me.devUid, userId: me.uid, text });
-        if (m) this.publish(me.channel, m);
+        const room = msg.channel && this.roomsOf(me).includes(msg.channel) ? msg.channel : me.channel;
+        const m = await this.store({ channel: room, kind: 'text', name: me.name, dept: me.dept, uid: me.devUid, userId: me.uid, text });
+        if (m) this.publish(room, m);
         break;
       }
       case 'react': {
@@ -410,13 +457,13 @@ export class WalkieRoom extends DurableObject {
         const who = me.devUid || `user${me.uid}`;
         const id = Number(msg.id);
         const row = await this.env.DB.prepare('SELECT channel FROM messages WHERE id = ?').bind(id).first();
-        if (!row || row.channel !== me.channel) return;
+        if (!row || !this.roomsOf(me).includes(row.channel)) return;
         const del = await this.env.DB.prepare('DELETE FROM reactions WHERE msg_id = ? AND uid = ? AND emoji = ?').bind(id, who, msg.emoji).run();
         if (!del.meta.changes) {
           await this.env.DB.prepare('INSERT INTO reactions (msg_id, uid, emoji, name, ts) VALUES (?, ?, ?, ?, ?)').bind(id, who, msg.emoji, me.name, Date.now()).run();
         }
         const by = await reactionsFor(this.env.DB, [id]);
-        for (const other of this.members(me.channel)) this.send(other, { type: 'react', id, by: by[id] || {} });
+        for (const other of this.members(row.channel)) this.send(other, { type: 'react', id, by: by[id] || {} });
         break;
       }
       case 'roster':

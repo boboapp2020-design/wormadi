@@ -390,7 +390,8 @@ test('ผู้สร้างกลุ่มนำคนออก: ถูกต
   assert.equal((await a.wait('kick_done')).to, ib);
   b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: 'กลุ่มนำออกทดสอบ' }));
   assert.equal((await b.wait('error')).code, 'banned', 'กลับเข้าเองไม่ได้');
-  assert.equal((await b.wait('joined')).channel, 'ทุกคน', 'ถูกปฏิเสธ = อยู่ห้องรวม ทุกคน');
+  const where = (await call('GET', '/api/users', T['แชทA'])).body.find(u => u.id === ib);
+  assert.equal(where.channel, 'ทุกคน', 'ถูกนำออก/ถูกปฏิเสธ = อยู่ห้องรวม ทุกคน');
   a.send(JSON.stringify({ type: 'invite', to: ib, channel: 'กลุ่มนำออกทดสอบ' }));
   await b.wait('invite');
   b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: 'กลุ่มนำออกทดสอบ' }));
@@ -463,6 +464,41 @@ test('ห้องรวม "ทุกคน": ไม่ได้อยู่ห
   const list = (await call('GET', '/api/channels', T.A)).body;
   assert.equal(list[0].name, 'ทุกคน'); assert.equal(list[0].lobby, true); assert.equal(list[0].can_delete, false);
   assert.equal((await call('POST', '/api/channels', T.A, { name: 'ทุกคน' })).status, 409, 'สร้างห้องชื่อซ้ำกับห้องรวมไม่ได้');
+  a.close(); b.close(); c.close();
+});
+
+test('หลายห้อง: อยู่ได้หลายห้อง, ได้ยินทุกห้องพร้อมบอกว่าห้องไหน, พูดชนกันได้ยินทีละห้อง, เปลี่ยนห้องพูดได้', async () => {
+  const WS = require(require('path').join(__dirname, '..', '..', 'server', 'node_modules', 'ws'));
+  const open = (tk, channel, rooms) => new Promise(res => { const w = new WS(base.replace(/^http/, 'ws')); w.msgs = []; w.bins = [];
+    w.on('message', (d, bin) => (bin ? w.bins.push(d) : w.msgs.push(JSON.parse(d))));
+    w.wait = async type => { for (let k = 0; k < 300; k++) { const j = w.msgs.findIndex(m => m.type === type); if (j >= 0) return w.msgs.splice(j, 1)[0]; await sleep(10); } throw new Error('timeout ' + type); };
+    w.on('open', async () => { w.send(JSON.stringify({ type: 'join', token: tk, channel, rooms })); res(w); }); });
+  // A is in two rooms (talks into ช่อง 1); B only in ช่อง 1; C only in ทุกคน (old style: one room)
+  const a = await open(T.A, 'ช่อง 1 - ทั่วไป', ['ทุกคน', 'ช่อง 1 - ทั่วไป']);
+  const j = await a.wait('joined');
+  assert.equal(j.channel, 'ช่อง 1 - ทั่วไป'); assert.deepEqual([...j.rooms].sort(), ['ช่อง 1 - ทั่วไป', 'ทุกคน'].sort());
+  const b = await open(T.B, 'ช่อง 1 - ทั่วไป'), c = await open(T['แชทC'], 'ทุกคน');
+  await b.wait('joined'); await c.wait('joined');
+  // C talks in ทุกคน -> A hears it and knows the room
+  c.send(JSON.stringify({ type: 'ptt_start', rate: 16000 })); await c.wait('talk_granted');
+  const s1 = await a.wait('talk_start'); assert.equal(s1.channel, 'ทุกคน'); assert.equal(s1.name, 'แชทC');
+  // B talks in ช่อง 1 at the same time -> A is told, but keeps hearing ทุกคน only
+  b.send(JSON.stringify({ type: 'ptt_start', rate: 16000 })); await b.wait('talk_granted');
+  const also = await a.wait('talk_also'); assert.equal(also.channel, 'ช่อง 1 - ทั่วไป'); assert.equal(also.hearing, 'ทุกคน');
+  c.send(Buffer.from([1, 1, 1, 1])); b.send(Buffer.from([2, 2, 2, 2])); await sleep(150);
+  assert.ok(a.bins.length >= 1 && a.bins.every(x => x[0] === 1), 'ได้ยินทีละห้อง ไม่ปนกัน');
+  c.send(JSON.stringify({ type: 'ptt_end' })); const e1 = await a.wait('talk_end'); assert.equal(e1.channel, 'ทุกคน');
+  b.send(JSON.stringify({ type: 'ptt_end' }));
+  // next time B talks, A hears ช่อง 1
+  await sleep(100);
+  b.send(JSON.stringify({ type: 'ptt_start', rate: 16000 })); await b.wait('talk_granted');
+  const s2 = await a.wait('talk_start'); assert.equal(s2.channel, 'ช่อง 1 - ทั่วไป');
+  b.send(JSON.stringify({ type: 'ptt_end' }));
+  // A switches the talk room to ทุกคน but stays in both
+  a.send(JSON.stringify({ type: 'join', channel: 'ทุกคน', rooms: ['ทุกคน', 'ช่อง 1 - ทั่วไป'] }));
+  const j2 = await a.wait('joined'); assert.equal(j2.channel, 'ทุกคน'); assert.equal(j2.rooms.length, 2);
+  const roster = await (async () => { for (let k = 0; k < 50; k++) { const r = a.msgs.filter(m => m.type === 'roster').pop(); if (r) return r; await sleep(20); } })();
+  assert.ok(roster.users.find(u => u.name === 'A').rooms.length === 2, 'roster บอกว่าอยู่ 2 ห้อง');
   a.close(); b.close(); c.close();
 });
 
