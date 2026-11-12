@@ -26,3 +26,7 @@ Thumbs.db
 app/android/app/src/main/assets/public/
 app/android/app/src/main/assets/capacitor.config.json
 app/android/app/src/main/assets/capacitor.plugins.json
+
+# Android signing key (upload to GitHub secrets, never commit)
+signing/
+*.p12

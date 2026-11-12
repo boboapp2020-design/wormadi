@@ -262,6 +262,12 @@ function joinNow(channel) {
 }
 window.addEventListener('online', () => { if (!stopped && !NATIVE && (!ws || ws.readyState > 1)) { attempt = 0; connect(); } });
 document.addEventListener('visibilitychange', () => {
+  if (document.hidden && !keepOn() && S.me && !S.call) {
+    // the user turned background listening off: leave the room while the app is not on screen
+    S.pausedBg = true; stopTalking(true); stopConnection();
+    return;
+  }
+  if (!document.hidden && S.pausedBg) { S.pausedBg = false; if (ACC() ? S.token : S.profile.name) startConnection(); }
   if (document.hidden) {
     // app minimised / screen off: keep the connection and speaker running
     if (!NATIVE && S.me && keepOn()) { if (!keepAudio) setKeepAlive(true, true); else keepAudio.play().catch(() => {}); if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {}); }
@@ -677,7 +683,8 @@ ROUTES.login = () => {
   </div>`, root => {
     bindInstallBar(root);
     if (NATIVE) {
-      $('server').value = lsGet('walkie_server') || '';
+      $('server').value = lsGet('walkie_server') || 'wormadi.pages.dev';
+      if (!serverBase) probeServer();
       $('server').onchange = () => probeServer();
     }
     if ($('emp')) $('emp').value = lsGet('walkie_emp') || '';
@@ -1557,7 +1564,7 @@ ROUTES.settings = () => {
       ${row('sLang', 'globe', 'ภาษา', '', '<span class="small muted">ไทย</span>')}
       ${row('sTheme', curTheme() === 'dark' ? 'moon' : 'sun', 'ธีม', '', `<span class="small muted">${curTheme() === 'dark' ? 'กลางคืน (มืด)' : 'ภาคสนาม (สว่าง)'}</span>`)}
       <label class="setrow web-only">${icon('sun', 'i lead')}<div class="grow"><b>เปิดจอค้างไว้ระหว่างใช้งาน</b><small>ได้ยินเสียงแน่นอนที่สุดสำหรับเว็บแอป</small></div><input type="checkbox" class="sw" id="optWake" ${wakeOn() ? 'checked' : ''}></label>
-      <label class="setrow web-only">${icon('volume', 'i lead')}<div class="grow"><b>ฟังต่อเมื่อพับแอป / ปิดจอ</b><small>เปิดไว้เสมอ แนะนำให้ติดตั้งแอปลงหน้าจอ (iPhone ทำได้จำกัด)</small></div><input type="checkbox" class="sw" id="optKeep" ${keepOn() ? 'checked' : ''}></label>
+      <label class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินเสียงเมื่อพับ / ปิดแอป</b><small>${NATIVE ? 'เปิด = ได้ยินแม้พับแอป ปิดจอ หรือปัดปิดแอป · ปิด = เงียบเมื่อออกจากหน้าแอป' : IOS ? 'เปิด = ได้ยินขณะพับแอปชั่วครู่ (iPhone อาจหยุดเสียงเมื่อพับนาน)' : 'เปิด = ได้ยินเมื่อพับแอปหรือปิดจอ · ถ้าปัดปิดแอปทิ้ง ให้ใช้แอป Android'}</small></div><input type="checkbox" class="sw" id="optKeep" ${keepOn() ? 'checked' : ''}></label>
       ${!NATIVE && !standalone() ? row('sInstall', 'download', 'ติดตั้งแอปลงหน้าจอ', installEvt ? 'แตะเพื่อติดตั้ง ใช้งานเต็มจอเหมือนแอป' : IOS ? 'Safari: ปุ่มแชร์ > เพิ่มไปยังหน้าจอโฮม' : 'แตะเพื่อดูวิธีติดตั้ง') : ''}
       ${NATIVE ? row('sBatt', 'battery', 'ให้แอปทำงานตอนจอดับ', 'ปิดการประหยัดแบตเตอรี่') : ''}
     </div>
@@ -1586,7 +1593,7 @@ ROUTES.settings = () => {
     on('sHelp', help); on('sAbout', about);
     on('sOut', () => { if (confirm('ออกจากระบบ?')) signOut(); });
     const w = $('optWake'); if (w) w.onchange = () => { lsSet('walkie_wake', w.checked ? '1' : '0'); setWake(w.checked); };
-    const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); setKeepAlive(k.checked); };
+    const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); setKeepAlive(k.checked); toast(k.checked ? 'ได้ยินเสียงเมื่อพับ / ปิดแอป: เปิด' : 'ได้ยินเสียงเมื่อพับ / ปิดแอป: ปิด (เงียบเมื่อออกจากหน้าแอป)'); };
   });
 };
 function help() {

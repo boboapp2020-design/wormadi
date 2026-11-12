@@ -1,0 +1,50 @@
+# Builds the WORMADI Android app (APK) on every push that touches the app or the web UI.
+# Download it from: Actions -> latest "Android APK" run -> Artifacts -> wormadi-android
+# Optional secrets (Settings -> Secrets and variables -> Actions) so updates install over the old app:
+#   ANDROID_KEYSTORE_B64       base64 of the PKCS12 signing key (alias "wormadi")
+#   ANDROID_KEYSTORE_PASSWORD  its password
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths: ['app/**', 'server/public/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+      WORMADI_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+
+      - name: Copy the web UI into the app
+        working-directory: app
+        run: npm ci && npm run sync
+
+      - name: Signing key
+        if: env.KS_B64 != ''
+        run: echo "$KS_B64" | base64 -d > app/android/app/wormadi.p12
+
+      - name: Build APK
+        working-directory: app/android
+        run: chmod +x gradlew && ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Name the file
+        run: cp app/android/app/build/outputs/apk/release/*.apk "wormadi-${{ github.run_number }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wormadi-android
+          path: wormadi-*.apk
+          retention-days: 30

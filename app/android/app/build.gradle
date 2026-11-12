@@ -7,8 +7,9 @@ android {
         applicationId "th.co.walkie.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // GitHub Actions build number -> every new APK installs over the previous one
+        versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int)
+        versionName "2." + (System.getenv('GITHUB_RUN_NUMBER') ?: '0')
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +17,25 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Signing key: wormadi.p12 (from the GitHub secret ANDROID_KEYSTORE_B64) keeps the same signature
+    // across builds so updates install over the old app. Without it, the build falls back to a debug key.
+    def wormadiKey = file('wormadi.p12')
+    signingConfigs {
+        wormadi {
+            if (wormadiKey.exists()) {
+                storeFile wormadiKey
+                storeType 'pkcs12'
+                storePassword System.getenv('WORMADI_KEYSTORE_PASSWORD')
+                keyAlias 'wormadi'
+                keyPassword System.getenv('WORMADI_KEYSTORE_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig wormadiKey.exists() ? signingConfigs.wormadi : signingConfigs.debug
         }
     }
 }
