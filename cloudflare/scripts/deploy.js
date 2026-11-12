@@ -80,7 +80,11 @@ const ask = q => new Promise(res => { const rl = readline.createInterface({ inpu
   // 6) deploy
   live(['deploy', '--config', config]);
 
-  // 7) main link without the account name: https://wormadi.pages.dev (front for the Worker)
+  // 7) old link walkie.<account>.workers.dev -> forwards to the main Worker (shares its voice room, no timers)
+  const lg = spawnSync(process.execPath, [WRANGLER, 'deploy'], { cwd: path.join(root, 'legacy'), stdio: 'inherit' });
+  if (lg.status) console.log('\n⚠️ อัปเดตลิงก์เดิม (walkie) ไม่สำเร็จ — ลิงก์หลักใช้ได้ตามปกติ');
+
+  // 7b) backup link https://wormadi.pages.dev (front for the main Worker)
   const r = spawnSync(process.execPath, [WRANGLER, 'pages', 'deploy', '--project-name', 'wormadi', '--branch', 'main', '--commit-dirty=true'], { cwd: path.join(root, 'pages'), stdio: 'inherit' });
   if (r.status) process.exit(r.status);
 
@@ -91,6 +95,7 @@ const ask = q => new Promise(res => { const rl = readline.createInterface({ inpu
   if (gc.status) console.log('\n⚠️ git push ไป GitHub (wormadi) ไม่สำเร็จ — ตรวจการเชื่อมต่อ/สิทธิ์ GitHub');
 
   console.log('\nเสร็จแล้ว');
-  console.log('  ลิงก์ 1 (Cloudflare): https://wormadi.pages.dev');
+  console.log('  ลิงก์หลัก (Cloudflare): https://wormadi.boboapp2020.workers.dev');
+  console.log('  ลิงก์สำรอง:           https://wormadi.pages.dev');
   console.log('  ลิงก์ 2 (GitHub):     https://boboapp2020-design.github.io/wormadi/' + (gc.status ? '  (ยังไม่ได้อัปเดต)' : '  (อัปเดตใน 1–2 นาที)'));
 })().catch(e => { console.error('\n✗', e.message); process.exit(1); });

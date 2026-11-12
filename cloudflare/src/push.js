@@ -14,7 +14,7 @@ async function signingKey(env) {
 /** Authorization header for one push service (aud = its origin) */
 async function vapidAuth(env, endpoint) {
   const header = b64url(enc.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
-  const claims = b64url(enc.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: 'https://wormadi.pages.dev' })));
+  const claims = b64url(enc.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: 'https://wormadi.boboapp2020.workers.dev' })));
   const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, await signingKey(env), enc.encode(`${header}.${claims}`));
   return `vapid t=${header}.${claims}.${b64url(sig)}, k=${env.VAPID_PUBLIC}`;
 }

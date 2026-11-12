@@ -2,7 +2,7 @@
 //   หน้าเว็บ (PWA) จาก ../server/public, WebSocket ห้องวอที่ "/", REST API ที่ /api/*
 //   ทุก API (ยกเว้น config/channels/login) ต้องส่ง  Authorization: Bearer <token>  จาก /api/login
 //   สิทธิ์: user (พนักงาน) < lead (หัวหน้า: มอบงาน, ปิดเหตุ SOS, ดูรายงาน/log) < admin (ผู้ดูแลระบบ)
-import { WalkieRoom, reactionsFor, EMOJIS } from './room.js';
+import { WalkieRoom, reactionsFor, EMOJIS, LOBBY } from './room.js';
 import { toWav } from './codec.js';
 import { pushAll, pushReady } from './push.js';
 import { hashPassword, verifyPassword, createSession, userFromToken, bearer, sha256, roleAtLeast, ROLES, PUBLIC_USER } from './auth.js';
@@ -28,7 +28,7 @@ export default {
     const url = new URL(req.url);
     if ((req.headers.get('Upgrade') || '').toLowerCase() === 'websocket') return room(env).fetch(req);
     // old link (*.workers.dev) -> main link without the account name; API keeps working for older Android installs
-    if (env.PUBLIC_URL && url.hostname.endsWith('.workers.dev') && req.method === 'GET' && !url.pathname.startsWith('/api/'))
+    if (env.PUBLIC_URL && url.hostname.endsWith('.workers.dev') && url.hostname !== new URL(env.PUBLIC_URL).hostname && req.method === 'GET' && !url.pathname.startsWith('/api/'))
       return Response.redirect(env.PUBLIC_URL + url.pathname + url.search, 301);
     if (url.pathname === '/__test/fire-reminders' && env.TEST_HOOKS === '1') return Response.json({ fired: await fireReminders(env) });
     if (url.pathname.startsWith('/api/')) {
@@ -184,9 +184,11 @@ async function api(req, env, url) {
     ]);
     const count = Object.fromEntries(live.map(c => [c.name, c.users]));
     const denied = viewer ? await deniedRooms(db, viewer) : null;
-    return json(results.map(c => ({ ...c, users: count[c.name] || 0,
+    const lobby = { id: 0, name: LOBBY, sub: 'ทุกคนที่ไม่ได้อยู่ในห้องแยก ได้ยินกันหมด', icon: 'users', color: 'gold', locked: 0, lobby: true,
+      created_by: null, creator_name: null, users: count[LOBBY] || 0, access: true, can_delete: false };
+    return json([lobby, ...results.filter(c => c.name !== LOBBY).map(c => ({ ...c, users: count[c.name] || 0,
       access: c.locked ? (denied ? !denied.has(c.name) : false) : true,
-      can_delete: !!viewer && (roleAtLeast(viewer.role, 'admin') || c.created_by === viewer.id) })));
+      can_delete: !!viewer && (roleAtLeast(viewer.role, 'admin') || c.created_by === viewer.id) }))]);
   }
   if (p === '/api/login' && m === 'POST') {
     const b = await readJson(req);
@@ -264,6 +266,7 @@ async function api(req, env, url) {
     const b = await readJson(req);
     const name = str(b.name, 40), pass = String(b.password || '');
     if (!name) return fail(400, 'กรุณาตั้งชื่อห้อง');
+    if (name === LOBBY) return fail(409, `"${LOBBY}" เป็นห้องรวมของทุกคนอยู่แล้ว ลองตั้งชื่ออื่น`);
     if (pass && (pass.length < 4 || pass.length > 32)) return fail(400, 'รหัสห้องต้องยาว 4–32 ตัว');
     if (!roleAtLeast(me.role, 'admin')) {
       const mine = await db.prepare('SELECT COUNT(*) AS n FROM channels WHERE created_by = ? AND active = 1').bind(me.id).first('n');
@@ -346,7 +349,7 @@ async function api(req, env, url) {
     let next = due;
     if (due && RPT_MS[rpt]) while (next <= now - 60000) next += RPT_MS[rpt];
     let channel = str(b.channel, 40) || null;
-    if (channel && (dmBlocked(channel, me) || (await deniedRooms(db, me)).has(channel) ||
+    if (channel && channel !== LOBBY && (dmBlocked(channel, me) || (await deniedRooms(db, me)).has(channel) ||
         !(await db.prepare('SELECT 1 AS x FROM channels WHERE name = ? AND active = 1').bind(channel).first('x')))) channel = null;
     if (m === 'POST') {
       const r = await db.prepare('INSERT INTO reminders (user_id, title, note, due_at, next_at, rpt, channel, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')

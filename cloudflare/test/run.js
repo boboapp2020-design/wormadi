@@ -5,11 +5,13 @@ const fs = require('fs');
 const path = require('path');
 const root = path.join(__dirname, '..');
 const PORT = 8799, URL = `http://127.0.0.1:${PORT}`;
-const STATE = path.join(root, '.wrangler', 'test-state');
+// its own folder: the preview server (.claude/launch.json) keeps .wrangler/test-state open while it runs
+// a fresh folder per run (Windows can keep an old one locked); old ones are removed when possible
+const STATE = path.join(root, '.wrangler', 'test-run-' + Date.now());
 const W = path.join(root, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
 const wr = (...a) => execFileSync(process.execPath, [W, ...a], { cwd: root, stdio: 'ignore' });
 
-fs.rmSync(STATE, { recursive: true, force: true });
+for (const d of fs.readdirSync(path.join(root, '.wrangler'))) if (/^test-run/.test(d)) { try { fs.rmSync(path.join(root, '.wrangler', d), { recursive: true, force: true }); } catch {} }
 wr('d1', 'migrations', 'apply', 'walkie-log', '--local', '--persist-to', STATE);
 const CH = ['ช่อง 1 - ทั่วไป', 'ช่อง 2 - ฝ่ายผลิต', 'ช่อง 3 - คลังสินค้า', 'ช่อง 4 - รปภ.'];
 wr('d1', 'execute', 'walkie-log', '--local', '--persist-to', STATE, '--command',

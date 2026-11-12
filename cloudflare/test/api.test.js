@@ -336,7 +336,7 @@ test('เชิญเข้ากลุ่ม: เชิญจากโปรไ
   await new Promise(r => b.on('open', r));
   b.send(JSON.stringify({ type: 'join', token: T['แชทB'] }));
   const wait = async (ws, type) => { for (let k = 0; k < 300; k++) { const j = ws.msgs.findIndex(m => m.type === type); if (j >= 0) return ws.msgs.splice(j, 1)[0]; await sleep(10); } throw new Error('timeout ' + type); };
-  assert.equal((await wait(b, 'joined')).channel, null, 'ไม่ได้เลือกกลุ่ม = ยังไม่อยู่กลุ่มไหน');
+  assert.equal((await wait(b, 'joined')).channel, 'ทุกคน', 'ไม่ได้เลือกห้อง = อยู่ห้องรวม ทุกคน');
   a.send(JSON.stringify({ type: 'invite', to: ib, channel: 'กลุ่มเชิญทดสอบ' }));
   const inv = await wait(b, 'invite');
   assert.equal(inv.channel, 'กลุ่มเชิญทดสอบ'); assert.equal(inv.locked, true);
@@ -390,13 +390,13 @@ test('ผู้สร้างกลุ่มนำคนออก: ถูกต
   assert.equal((await a.wait('kick_done')).to, ib);
   b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: 'กลุ่มนำออกทดสอบ' }));
   assert.equal((await b.wait('error')).code, 'banned', 'กลับเข้าเองไม่ได้');
-  assert.equal((await b.wait('joined')).channel, null, 'ถูกปฏิเสธ = ยังไม่อยู่กลุ่มไหน');
+  assert.equal((await b.wait('joined')).channel, 'ทุกคน', 'ถูกปฏิเสธ = อยู่ห้องรวม ทุกคน');
   a.send(JSON.stringify({ type: 'invite', to: ib, channel: 'กลุ่มนำออกทดสอบ' }));
   await b.wait('invite');
   b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: 'กลุ่มนำออกทดสอบ' }));
   assert.equal((await b.wait('joined')).channel, 'กลุ่มนำออกทดสอบ', 'เชิญแล้วเข้าได้อีก');
   b.send(JSON.stringify({ type: 'join', token: T['แชทB'], channel: '' }));
-  assert.equal((await b.wait('joined')).channel, null, 'ออกจากกลุ่มได้ (ยังเชื่อมต่ออยู่)');
+  assert.equal((await b.wait('joined')).channel, 'ทุกคน', 'ออกจากกลุ่มแล้วกลับมาห้องรวม ทุกคน (ยังเชื่อมต่ออยู่)');
   a.close(); b.close(); c.close();
   await call('DELETE', '/api/channels/' + room.body.id, T['แชทA']);
 });
@@ -444,6 +444,26 @@ test('แชทส่วนตัว: ส่งถึงอีกฝ่ายท
   const n = (await call('GET', '/api/notifications', T['แชทC'])).body;
   assert.ok(JSON.stringify(n).includes('ถึงคนออฟไลน์'), 'คนที่ไม่ได้ออนไลน์เห็นในการแจ้งเตือน');
   a.close(); b.close();
+});
+
+test('ห้องรวม "ทุกคน": ไม่ได้อยู่ห้องแยก = วอได้และทุกคนได้ยิน, คนในห้องแยกไม่ได้ยิน, ลบ/สร้างชื่อนี้ไม่ได้', async () => {
+  const WS = require(require('path').join(__dirname, '..', '..', 'server', 'node_modules', 'ws'));
+  const open = tk => new Promise(res => { const w = new WS(base.replace(/^http/, 'ws')); w.msgs = []; w.bins = [];
+    w.on('message', (d, bin) => (bin ? w.bins.push(d) : w.msgs.push(JSON.parse(d))));
+    w.wait = async type => { for (let k = 0; k < 300; k++) { const j = w.msgs.findIndex(m => m.type === type); if (j >= 0) return w.msgs.splice(j, 1)[0]; await sleep(10); } throw new Error('timeout ' + type); };
+    w.on('open', () => { w.send(JSON.stringify({ type: 'join', token: tk })); res(w); }); });
+  const a = await open(T.A), b = await open(T.B);
+  assert.equal((await a.wait('joined')).channel, 'ทุกคน'); assert.equal((await b.wait('joined')).channel, 'ทุกคน');
+  const c = await client(T.A2, 'ช่อง 3 - คลังสินค้า');         // someone in a separate room
+  a.send(JSON.stringify({ type: 'ptt_start', rate: 16000 })); await a.wait('talk_granted');
+  a.send(Buffer.alloc(640)); await sleep(150);
+  assert.ok(b.bins.length > 0, 'คนในห้องรวมได้ยิน');
+  assert.equal(c.bins.length, 0, 'คนในห้องแยกไม่ได้ยิน');
+  a.send(JSON.stringify({ type: 'ptt_end' }));
+  const list = (await call('GET', '/api/channels', T.A)).body;
+  assert.equal(list[0].name, 'ทุกคน'); assert.equal(list[0].lobby, true); assert.equal(list[0].can_delete, false);
+  assert.equal((await call('POST', '/api/channels', T.A, { name: 'ทุกคน' })).status, 409, 'สร้างห้องชื่อซ้ำกับห้องรวมไม่ได้');
+  a.close(); b.close(); c.close();
 });
 
 (async () => {

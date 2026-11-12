@@ -40,7 +40,7 @@ test('join ได้รับ joined + รายชื่อช่อง แล�
   a.json({ type: 'join', name: 'A', channel: 'ช่อง 2 - ฝ่ายผลิต' });
   const j = await a.wait('joined');
   assert.equal(j.channel, 'ช่อง 2 - ฝ่ายผลิต');
-  assert.equal(j.channels.length, 4);
+  assert.equal(j.channels.filter(c => c !== 'ทุกคน').length, 4);   // Cloudflare also has the all-hands channel
   const s = await a.wait('state');
   assert.deepEqual(s.users.map(u => u.name), ['A']);
   a.close();
@@ -130,7 +130,7 @@ test('เว็บเดิม (client ปกติ) ไม่ถูกตัด
 test('/api/channels ตอบ JSON รายชื่อช่อง', async () => {
   const res = await fetch(`${base}/api/channels`);
   const list = await res.json();
-  assert.equal(list.length, 4);
+  assert.equal(list.filter(c => !c.lobby).length, 4);
   assert.ok('name' in list[0] && 'users' in list[0]);
 });
 

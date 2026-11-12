@@ -1,6 +1,6 @@
 // wormadi.pages.dev
 //  - voice WebSocket -> straight into the walkie room (same Durable Object the Worker uses)
-//  - everything else (pages, API) -> Worker "walkie"
+//  - everything else (pages, API) -> Worker "wormadi"
 export default {
   fetch(req, env) {
     if ((req.headers.get('Upgrade') || '').toLowerCase() === 'websocket' && new URL(req.url).pathname === '/') {

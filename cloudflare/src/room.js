@@ -16,6 +16,8 @@ const PONG = '{"type":"pong"}';
 const SWEEP_MS = 25_000;
 const STALE_MS = 50_000;
 export const EMOJIS = ['👍', '✅', '❤️', '🙏', '😂'];
+// the all-hands channel: everyone who is not in a separate room is here and hears each other
+export const LOBBY = 'ทุกคน';
 
 export class WalkieRoom extends DurableObject {
   constructor(ctx, env) {
@@ -42,7 +44,7 @@ export class WalkieRoom extends DurableObject {
       list = String(this.env.CHANNELS || '').split('|').map(s => s.trim()).filter(Boolean);
       if (!list.length) list = ['ช่อง 1 - ทั่วไป'];
     }
-    this.channels = list;
+    this.channels = this.env.DB ? [LOBBY, ...list.filter(n => n !== LOBBY)] : list;
     return list;
   }
 
@@ -286,8 +288,9 @@ export class WalkieRoom extends DurableObject {
           if (this.info(ws).channel) return;     // stay in the current room
           ch = null;
         }
+        if (!ch && this.env.DB) ch = LOBBY;       // no separate room -> everyone together
         const cur = this.info(ws);
-        if (!ch) {                               // no rooms yet: signed in, waiting for someone to create one
+        if (!ch) {                               // (LAN server without accounts only)
           if (cur.channel) this.leave(ws);
           this.setInfo(ws, { ...this.info(ws), ok: true, uid, name, dept, role, devUid, channel: null });
           this.send(ws, { type: 'joined', id: uid ?? cur.cid, name, channel: null, channels: this.channels, uid: devUid, emojis: EMOJIS });

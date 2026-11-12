@@ -1,0 +1,18 @@
+{
+  // Old link walkie.<account>.workers.dev -> forwards to the main Worker "wormadi" (see legacy/worker.js)
+  //   deploy: node ../node_modules/wrangler/bin/wrangler.js deploy   (run by scripts/deploy.js)
+  "name": "walkie",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "services": [{ "binding": "APP", "service": "wormadi" }],
+  "durable_objects": { "bindings": [{ "name": "ROOM", "class_name": "WalkieRoom", "script_name": "wormadi" }] },
+  // this Worker used to hold the voice room itself; it now uses the main Worker's room
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["WalkieRoom"] },
+    { "tag": "v2", "deleted_classes": ["WalkieRoom"] }
+  ],
+  // no timers here: reminders and clean-up run on the main Worker only
+  "triggers": { "crons": [] }
+}

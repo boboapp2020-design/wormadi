@@ -45,11 +45,12 @@ const ACC = () => !!S.config.accounts;
 let serverBase = NATIVE ? (lsGet('walkie_server_base') || '') : '';
 // The same server answers at more than one address. Some networks block some Cloudflare addresses,
 // so when a connection hangs the app quietly moves on to the next address (same server, same accounts).
-//  - on wormadi.pages.dev: this page's own address, then the Worker address
-//  - on GitHub Pages (the second link): the app's screens come from GitHub, the server is still Cloudflare
-const SERVER_ADDRS = ['https://wormadi.pages.dev', 'https://walkie.boboapp2020.workers.dev'];
+//  - main link wormadi.boboapp2020.workers.dev (Workers range, like BSN Chat): its own address
+//  - backup wormadi.pages.dev: this page's own address, then the main Worker address
+//  - GitHub Pages: the screens come from GitHub, the server is Cloudflare (main address first)
+const SERVER_ADDRS = ['https://wormadi.boboapp2020.workers.dev', 'https://wormadi.pages.dev'];
 const ON_GITHUB = !NATIVE && /\.github\.io$/.test(location.hostname);
-const API_BASES = NATIVE ? [] : ON_GITHUB ? SERVER_ADDRS : /\.pages\.dev$/.test(location.hostname) ? ['', SERVER_ADDRS[1]] : [];
+const API_BASES = NATIVE ? [] : ON_GITHUB ? SERVER_ADDRS : /\.pages\.dev$/.test(location.hostname) ? ['', SERVER_ADDRS[0]] : [];
 if (ON_GITHUB) serverBase = SERVER_ADDRS[0];
 const BACKUP_BASE = API_BASES.length ? API_BASES[API_BASES.length - 1] : '';
 function nextBase() {           // move to the next address (returns false when there is none)
@@ -371,7 +372,8 @@ function onMessage(m) {
     case 'kicked':
       if (lsGet('walkie_channel') === m.channel) lsSet('walkie_channel', '');
       if (S.me) S.me.channel = null;
-      toast(`${m.by} นำคุณออกจากกลุ่ม “${m.channel}”`);
+      toast(`${m.by} นำคุณออกจากกลุ่ม “${m.channel}” กลับมาห้องรวม (ทุกคน)`);
+      joinNow();                       // back to the all-hands channel
       if (['ptt', 'chat'].includes(S.route)) go('home', {}, true); else render();
       break;
     case 'kick_done': toast(`นำ ${m.name || 'สมาชิก'} ออกจากกลุ่มแล้ว`); break;
@@ -697,7 +699,7 @@ ROUTES.login = () => {
     <h2>เข้าสู่ระบบ</h2>
     <form id="lf" novalidate autocomplete="off">
       <div class="native-only">
-        <div class="field">${icon('globe', 'i lead')}<input id="server" placeholder="ที่อยู่เซิร์ฟเวอร์ เช่น wormadi.pages.dev" autocapitalize="off" spellcheck="false" inputmode="url"></div>
+        <div class="field">${icon('globe', 'i lead')}<input id="server" placeholder="ที่อยู่เซิร์ฟเวอร์ เช่น wormadi.boboapp2020.workers.dev" autocapitalize="off" spellcheck="false" inputmode="url"></div>
         <div class="err" id="serverInfo" style="color:var(--muted)"></div>
       </div>
       ${acc || NATIVE ? `
@@ -717,7 +719,7 @@ ROUTES.login = () => {
   </div>`, root => {
     bindInstallBar(root);
     if (NATIVE) {
-      $('server').value = lsGet('walkie_server') || 'wormadi.pages.dev';
+      $('server').value = lsGet('walkie_server') || 'wormadi.boboapp2020.workers.dev';
       if (!serverBase) probeServer();
       $('server').onchange = () => probeServer();
     }
@@ -740,7 +742,7 @@ ROUTES.login = () => {
           if (d.user.must_change) { S.lastPw = pw; return go('setpw', {}, true); }
           await afterSignIn();
           if (pendingJoin()) return go('join', { room: pendingJoin(true) }, true);
-          if (!lsGet('walkie_channel')) { toast('เลือกกลุ่มที่จะเข้า หรือสร้างกลุ่มใหม่'); return go('channels', { then: 'ptt' }, true); }
+          if (!lsGet('walkie_channel')) toast('คุณอยู่ห้องรวม (ทุกคน) กดค้างปุ่มพูดได้เลย');
           go('home', {}, true);
         } catch (e2) { err.textContent = e2.message; }
         finally { if ($('lbtn')) { $('lbtn').disabled = false; $('lbtn').textContent = 'เข้าสู่ระบบ'; } }
@@ -839,8 +841,8 @@ ROUTES.setpw = () => {
         toast('ตั้งรหัสผ่านใหม่แล้ว');
         await afterSignIn();
         if (pendingJoin()) return go('join', { room: pendingJoin(true) }, true);
-        toast('เลือกกลุ่มที่จะเข้า หรือสร้างกลุ่มใหม่');
-        go('channels', { then: 'ptt' }, true);
+        toast('คุณอยู่ห้องรวม (ทุกคน) กดค้างปุ่มพูดได้เลย');
+        go('home', {}, true);
       } catch (e2) { err.textContent = e2.message; $('pbtn').disabled = false; }
     };
   });
@@ -907,7 +909,8 @@ ROUTES.ptt = () => {
       ${ch && ch.dm ? `<button class="btn sm" id="hangUp" type="button" style="background:#cf2020;color:#fff;border-color:#cf2020">${icon('x')}วางสาย</button>` : ''}
       <button class="btn sm" id="toChat" type="button">${icon('chat')}พิมพ์ / ฟังย้อนหลัง</button>
       ${ch && ch.id ? `<button class="btn sm" id="shareRoom" type="button">${icon('send')}แชร์ห้อง</button>` : ''}</div>
-    ${ch && !ch.dm ? `<div style="display:flex;justify-content:center;gap:10px;margin:0 0 10px">
+    ${ch && ch.lobby ? `<p class="small" style="text-align:center;color:var(--ptt-page-muted);margin:0 14px 10px">ห้องรวม: ทุกคนที่ไม่ได้อยู่ในห้องแยกได้ยินคุณ · อยากคุยแยกให้ไปที่ “กลุ่ม” แล้วสร้าง/เข้าห้อง</p>` : ''}
+    ${ch && !ch.dm && !ch.lobby ? `<div style="display:flex;justify-content:center;gap:10px;margin:0 0 10px">
       <button class="btn sm" id="roomPeople" type="button">${icon('team')}สมาชิกในกลุ่ม</button>
       <button class="btn sm" id="leaveRoom" type="button" style="color:#fff;background:#cf2020;border-color:#cf2020">${icon('logout')}ออกจากกลุ่ม</button></div>` : ''}
     <p class="small web-only" style="text-align:center;color:var(--ptt-page-muted);margin:0 0 14px">บนคอมพิวเตอร์ กด Spacebar ค้างไว้เพื่อพูดได้</p>
@@ -946,10 +949,10 @@ ROUTES.channels = p => {
         const lock = c.locked ? `<span title="มีรหัส" style="color:${c.access ? 'var(--muted)' : 'var(--err-fg)'}">${icon('lock')}</span>` : '';
         return `<div class="li" role="button" tabindex="0" data-ch="${esc(c.name)}">${chanIcon(c)}
           <div class="grow"><div class="t1 ell">${esc(c.name)} ${lock}</div><div class="t2 ell">${icon('user')}${S.counts[c.name] || 0} คน${c.locked ? (c.access ? ' · มีรหัส (เข้าได้แล้ว)' : ' · มีรหัส') : ' · ห้องเปิด'}${c.creator_name ? ' · โดย ' + esc(c.creator_name) : ''}</div></div>
-          <button class="ib" data-share="${c.id}" aria-label="แชร์ห้อง ${esc(c.name)}" style="color:var(--primary-fg)">${icon('send')}</button>
+          ${c.lobby ? '' : `<button class="ib" data-share="${c.id}" aria-label="แชร์ห้อง ${esc(c.name)}" style="color:var(--primary-fg)">${icon('send')}</button>`}
           ${c.can_delete ? `<button class="ib" data-del="${c.id}" aria-label="ลบห้อง ${esc(c.name)}" style="color:var(--err-fg)">${icon('trash')}</button>` : ''}
           <button class="ib" data-fav="${esc(c.name)}" aria-label="${fav ? 'เอาออกจากรายการโปรด' : 'เพิ่มในรายการโปรด'}" style="color:${fav ? '#e0a100' : 'var(--nav-muted)'}">${icon(fav ? 'starf' : 'star')}</button>
-          ${cur ? `<button class="btn sm" data-leave type="button" style="color:var(--err-fg)">ออก</button>` : `<span class="chev">${icon('chev')}</span>`}</div>`;
+          ${cur && !c.lobby ? `<button class="btn sm" data-leave type="button" style="color:var(--err-fg)">ออก</button>` : `<span class="chev">${icon('chev')}</span>`}</div>`;
       }).join('') : `<div class="empty">${tab === 'fav' ? 'ยังไม่มีรายการโปรด แตะ ☆ ที่ห้องเพื่อเพิ่ม' : q ? 'ไม่พบห้อง' : 'ยังไม่มีห้อง กด “สร้างห้องใหม่” เพื่อเริ่มคุยกับทีม'}</div>`;
       for (const r of $$('[data-ch]', root)) r.onclick = e => {
         if (e.target.closest('[data-fav],[data-del],[data-share],[data-leave]')) return;
@@ -1091,8 +1094,8 @@ function leaveRoom(ask = true) {
   const go2 = () => {
     closeSheet(); stopTalking(true);
     lsSet('walkie_channel', '');
-    joinNow();                     // no channel -> "not in a group"
-    toast(`ออกจากกลุ่ม “${ch}” แล้ว`);
+    joinNow();                     // no channel -> the all-hands channel
+    toast(`ออกจากกลุ่ม “${ch}” แล้ว กลับมาห้องรวม (ทุกคน)`);
     if (['ptt', 'chat'].includes(S.route)) go('home', {}, true); else render();
   };
   if (!ask) return go2();
@@ -1122,7 +1125,7 @@ function roomMembersSheet() {
 function enterRoom(name, then, opts = {}) {
   const c = S.channels.find(x => x.name === name);
   if (S.me && S.me.channel === name) { if (then) go(then, {}, true); return; }     // already here
-  if (!opts.confirmed && c) return confirmRoom(c, then);
+  if (!opts.confirmed && c && !c.lobby) return confirmRoom(c, then);     // the all-hands channel needs no confirmation
   if (c && c.locked && !c.access) return askRoomPass(c, then);
   if (!S.me || S.me.channel !== name) { stopTalking(true); joinNow(name); }
   if (then) go(then, {}, true);
