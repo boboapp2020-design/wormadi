@@ -401,3 +401,13 @@ input.masked.show { -webkit-text-security: none; text-security: none; }
   .homefit .tile svg.i { width:clamp(38px, 7dvh, 64px); height:clamp(38px, 7dvh, 64px); padding:clamp(7px, 1.3dvh, 12px); }
   .homefit .tile { font-size:clamp(15px, 2.2dvh, 18px); gap:clamp(2px, .7dvh, 6px); padding:clamp(6px, 1.1dvh, 12px) 8px; }
 }
+
+/* ---- profile photo frame: WORMADI blue->orange ring, a thin gap, soft shadow */
+.av { --ring:3px; --gap:2px; box-sizing:border-box; border:var(--ring) solid transparent; padding:var(--gap); overflow:hidden;
+  background:linear-gradient(var(--panel), var(--panel)) padding-box, conic-gradient(from 210deg, #0b4fa8, #1f8fe0, #ff9f1c, #ffd166, #ff9f1c, #1f8fe0, #0b4fa8) border-box;
+  box-shadow:0 3px 8px rgba(11,58,140,.28); }
+.av img, .av svg { border-radius:50%; background:#d7e6f8; }
+.msg .av, .li .av { --ring:2px; --gap:1.5px; }
+.home-top .av { --ring:3px; --gap:2px; }
+.prof .bigav .av { --ring:5px; --gap:3px; box-shadow:0 6px 16px rgba(11,58,140,.35); }
+.prof .bigav .cam { z-index:2; }
