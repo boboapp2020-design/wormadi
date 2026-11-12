@@ -85,17 +85,13 @@ const ask = q => new Promise(res => { const rl = readline.createInterface({ inpu
   const r = spawnSync(process.execPath, [WRANGLER, 'pages', 'deploy', '--project-name', 'wormadi', '--branch', 'main', '--commit-dirty=true'], { cwd: path.join(root, 'pages'), stdio: 'inherit' });
   if (r.status) process.exit(r.status);
 
-  // 8) the second link: the same screens on GitHub Pages (for networks that block some Cloudflare addresses)
+  // 8) the code -> GitHub (only what is already committed). GitHub Pages serves the app from this repo:
+  //    https://boboapp2020-design.github.io/wormadi/ -> server/public/  (the second link)
   const top = path.join(root, '..');
-  const gp = spawnSync(process.execPath, [path.join(top, 'tools', 'publish-github-pages.js')], { cwd: top, stdio: 'inherit', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
-  const pagesOk = !gp.status;
-  if (!pagesOk) console.log('\n⚠️ ส่งขึ้น GitHub Pages ไม่สำเร็จ (ตรวจว่ามี repo สาธารณะ boboapp2020-design/wormadi-app แล้ว) — Cloudflare อัปเดตแล้วตามปกติ');
-
-  // 9) the code itself -> private GitHub repo (only what is already committed)
   const gc = spawnSync('git', ['push'], { cwd: top, stdio: 'inherit', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
   if (gc.status) console.log('\n⚠️ git push ไป GitHub (wormadi) ไม่สำเร็จ — ตรวจการเชื่อมต่อ/สิทธิ์ GitHub');
 
   console.log('\nเสร็จแล้ว');
   console.log('  ลิงก์ 1 (Cloudflare): https://wormadi.pages.dev');
-  console.log('  ลิงก์ 2 (GitHub):     https://boboapp2020-design.github.io/wormadi-app/' + (pagesOk ? '' : '  (ยังไม่ได้อัปเดต)'));
+  console.log('  ลิงก์ 2 (GitHub):     https://boboapp2020-design.github.io/wormadi/' + (gc.status ? '  (ยังไม่ได้อัปเดต)' : '  (อัปเดตใน 1–2 นาที)'));
 })().catch(e => { console.error('\n✗', e.message); process.exit(1); });

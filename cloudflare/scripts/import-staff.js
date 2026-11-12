@@ -29,7 +29,9 @@ const UNITS = [
 ];
 
 // คนที่เพิ่มเป็นรายคน (นอกหน่วยด้านบน) ตามรหัสพนักงาน · ไม่มีช่องหลัก
-const EXTRA_EMP = ['19464', '33258', '18853', '19015', '19431', '19430'];   // ชาญเฉลิม, วีระศักดิ์, พูโขง, คำตัน, สุรศักดิ์, ศรัญย์พงษ์
+// one employee ID per line in data/extra-emp.txt (kept out of git: personal data)
+const EXTRA_FILE = path.join(__dirname, '..', 'data', 'extra-emp.txt');
+const EXTRA_EMP = fs.existsSync(EXTRA_FILE) ? fs.readFileSync(EXTRA_FILE, 'utf8').split(/\r?\n/).map(x => x.trim()).filter(x => x && !x.startsWith('#')) : [];
 
 function parseCsv(text) {
   const rows = []; let row = [], cell = '', q = false;

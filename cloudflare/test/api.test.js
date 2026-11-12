@@ -196,9 +196,12 @@ test('โปรไฟล์: เปลี่ยนรูป และเปล�
   assert.equal((await call('POST', '/api/login', null, { emp: 't-web', password: 'newpass1' })).status, 200);
 });
 
+// an employee from the (private) staff list, unit ลูกหีบ
+const STAFF_ID = (() => { try { const row = require('fs').readFileSync(require('path').join(__dirname, '..', 'data', 'staff.csv'), 'utf8').split(/\r?\n/).find(l => l.includes('หน่วยลูกหีบ')); return row ? row.split(',')[0].trim() : null; } catch { return null; } })();
+
 test('พนักงานนำเข้า: รหัสพนักงาน + 1234 เข้าได้ แต่ต้องตั้งรหัสใหม่ก่อนใช้งาน', async () => {
-  assert.equal((await call('POST', '/api/login', null, { emp: '18878', password: 'wrong' })).status, 401);
-  const r = await call('POST', '/api/login', null, { emp: '18878', password: '1234' });
+  assert.equal((await call('POST', '/api/login', null, { emp: STAFF_ID, password: 'wrong' })).status, 401);
+  const r = await call('POST', '/api/login', null, { emp: STAFF_ID, password: '1234' });
   assert.equal(r.status, 200);
   assert.equal(r.body.user.must_change, 1);
   assert.equal(r.body.user.dept, 'ลูกหีบ');
@@ -218,9 +221,9 @@ test('พนักงานนำเข้า: รหัสพนักงาน
   assert.equal((await call('POST', '/api/me/password', tk, { old: '1234', new: '1234' })).status, 400, 'ห้ามใช้รหัสเดิม');
   assert.equal((await call('POST', '/api/me/password', tk, { old: '1234', new: 'mypass99' })).status, 200);
   assert.equal((await call('GET', '/api/users', tk)).status, 200, 'ตั้งรหัสแล้วใช้งานได้');
-  const again = await call('POST', '/api/login', null, { emp: '18878', password: 'mypass99' });
+  const again = await call('POST', '/api/login', null, { emp: STAFF_ID, password: 'mypass99' });
   assert.equal(again.body.user.must_change, 0);
-  assert.equal((await call('POST', '/api/login', null, { emp: '18878', password: '1234' })).status, 401, 'รหัส 1234 ใช้ไม่ได้แล้ว');
+  assert.equal((await call('POST', '/api/login', null, { emp: STAFF_ID, password: '1234' })).status, 401, 'รหัส 1234 ใช้ไม่ได้แล้ว');
 });
 
 test('ห้อง: พนักงานสร้างห้องเปิด/ห้องมีรหัส, คนอื่นต้องใส่รหัสก่อน, ลบได้เฉพาะคนสร้าง', async () => {
