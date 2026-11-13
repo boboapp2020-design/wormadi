@@ -609,3 +609,26 @@ test('รายงานเหตุการณ์: โพสต์ข้อค
   assert.equal((await call('DELETE', `/api/incidents/${r.body.id}`, T['แชทA'])).status, 200);
   b.close();
 });
+
+test('รายงานเหตุการณ์ระดับสูง: ทุกคนได้รับเตือนพร้อมระดับ · คนอื่นคอมเมนต์ได้ · คนโพสต์ปิดเหตุการณ์ (ปกติแล้ว) · ทุกคนได้รับแจ้ง', async () => {
+  const b = await client(T['แชทB'], 'ทุกคน'), c = await client(T['แชทC'], 'ทุกคน');
+  const r = await call('POST', '/api/incidents', T['แชทA'], { text: 'ไฟไหม้สายพาน', place: 'ลูกหีบ', level: 'high' });
+  assert.equal(r.status, 200);
+  assert.equal((await b.wait('incident')).level, 'high', 'ทุกคนได้รับเตือนระดับสูง');
+  assert.equal((await c.wait('incident')).level, 'high');
+  assert.equal((await call('GET', '/api/incidents', T['แชทB'])).body.find(x => x.id === r.body.id).level, 'high');
+  assert.equal((await call('POST', `/api/incidents/${r.body.id}/comments`, T['แชทC'], { text: 'ดับได้แล้ว รอคนโพสต์ยืนยัน' })).status, 200, 'คนอื่นคอมเมนต์ได้');
+  assert.equal((await call('POST', `/api/incidents/${r.body.id}/comments`, T['แชทC'], { text: ' ' })).status, 400);
+  assert.equal((await b.wait('incident_comment')).id, r.body.id, 'คนออนไลน์เห็นคอมเมนต์ใหม่');
+  const cm = (await call('GET', `/api/incidents/${r.body.id}/comments`, T['แชทB'])).body;
+  assert.equal(cm.length, 1); assert.equal(cm[0].text, 'ดับได้แล้ว รอคนโพสต์ยืนยัน');
+  assert.equal((await call('GET', '/api/incidents', T['แชทB'])).body.find(x => x.id === r.body.id).comments, 1, 'รายการบอกจำนวนคอมเมนต์');
+  assert.equal((await call('PATCH', `/api/incidents/${r.body.id}`, T['แชทC'], { done: true })).status, 403, 'คนอื่นปิดเหตุการณ์ไม่ได้');
+  assert.equal((await call('PATCH', `/api/incidents/${r.body.id}`, T['แชทA'], { done: true })).status, 200, 'คนโพสต์ปิดเหตุการณ์ได้');
+  const d = await b.wait('incident_done');
+  assert.equal(d.done, true); assert.equal(d.level, 'high');
+  const low = await call('POST', '/api/incidents', T['แชทA'], { text: 'ทดสอบ', level: 'weird' });
+  assert.equal((await call('GET', '/api/incidents', T['แชทA'])).body.find(x => x.id === low.body.id).level, 'low', 'ระดับไม่ถูกต้อง = ต่ำ');
+  await call('DELETE', `/api/incidents/${r.body.id}`, T['แชทA']); await call('DELETE', `/api/incidents/${low.body.id}`, T['แชทA']);
+  b.close(); c.close();
+});

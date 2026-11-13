@@ -433,11 +433,22 @@ function onMessage(m) {
     case 'react': S.chat.reactions[m.id] = m.by; const el = $('r-' + m.id); if (el) el.innerHTML = reactsHtml(m.id); break;
     case 'incident':
       if (S.user && m.name === S.user.name) break;
-      S.incNew = (S.incNew || 0) + 1; renderBadges();
-      vibrate([120, 60, 120]); if (!NATIVE) beep(740, 0.08);
-      toast(`📋 ${m.name} รายงานเหตุการณ์${m.place ? ' · ' + m.place : ''}`);
-      if (document.hidden) systemNotify(`📋 ${m.name} รายงานเหตุการณ์`, m.text || m.place || 'แตะเพื่อดู', 'incident');
+      S.incNew = (S.incNew || 0) + 1;
+      if (m.level === 'high') { S.incHot = (S.incHot || 0) + 1; renderBadges(); highIncidentAlert(m); }
+      else {
+        renderBadges(); vibrate([120, 60, 120]); if (!NATIVE) beep(740, 0.08);
+        toast(`📋 ${m.name} รายงานเหตุการณ์${m.level === 'medium' ? ' (ปานกลาง)' : ''}${m.place ? ' · ' + m.place : ''}`);
+        if (document.hidden) systemNotify(`📋 ${m.name} รายงานเหตุการณ์`, m.text || m.place || 'แตะเพื่อดู', 'incident');
+      }
       if (S.route === 'incidents') render();
+      break;
+    case 'incident_comment':
+      if (S.user && m.name !== S.user.name && m.owner === S.user.id) { vibrate([80]); toast(`💬 ${m.name} แสดงความคิดเห็นในรายงานของคุณ`); if (document.hidden) systemNotify(`💬 ${m.name} แสดงความคิดเห็น`, m.text, 'incident-cm'); }
+      if (S.route === 'incidents' && !$('cmList')) render();
+      break;
+    case 'incident_done':
+      if (m.done && m.level === 'high') { toast(`✅ ${m.name} ปิดเหตุการณ์แล้ว (ปกติแล้ว)`); if ($('hiAlert')) closeSheet(); }
+      refreshIncidentBadge(); if (S.route === 'incidents') render();
       break;
     case 'notification':
       S.unread++; renderBadges();
@@ -685,7 +696,7 @@ function markChannelRead(ch) {
 function renderBadges() {
   const msgs = S.msgAlerts.filter(a => !a.read).length + (S.dmUnread ? dmUnreadTotal() : 0), n = S.unread + msgs;
   const set = (id, v) => { const b = $(id); if (b) { b.textContent = v > 9 ? '9+' : v; b.classList.toggle('hidden', !v); } };
-  set('navMsgBadge', msgs); set('bellBadge', n); set('taskBadge', S.incNew || 0); set('msgTileBadge', msgs);
+  set('navMsgBadge', msgs); set('bellBadge', n); set('taskBadge', S.incNew || 0); for (const t of $$('[data-to="incidents"]')) t.classList.toggle('hot', !!S.incHot); set('msgTileBadge', msgs);
 }
 const isMine = m => (m.user_id && S.user && m.user_id === S.user.id) || (m.uid && m.uid === S.uid) || (!m.uid && !m.user_id && S.me && m.name === S.me.name);
 function reactsHtml(id) {
@@ -1781,13 +1792,24 @@ function pickImage(maxSide, cb, quality = 0.85, opts = {}) {
 }
 
 // ---------------------------------------------------------------- รายงานเหตุการณ์ (board: everyone posts what they found, with a photo)
+const LEVELS = { low: ['ต่ำ', 'lv-low'], medium: ['ปานกลาง', 'lv-med'], high: ['สูง', 'lv-high'] };
+const lvPill = l => { const [t, c] = LEVELS[l] || LEVELS.low; return `<span class="pill ${c}">ระดับ${t}</span>`; };
 function agoText(ts) {
   const m = Math.round((Date.now() - ts) / 60000);
   return m < 1 ? 'เมื่อสักครู่' : m < 60 ? m + ' นาทีที่แล้ว' : m < 1440 ? Math.round(m / 60) + ' ชม.ที่แล้ว' : fmtDate(ts) + ' ' + fmtTime(ts);
 }
+function highIncidentAlert(m) {
+  vibrate([500, 200, 500, 200, 500]);
+  if (!NATIVE) { ensureCtx(); [0, 350, 700].forEach(t => setTimeout(() => beep(980, 0.22), t)); }
+  if (document.hidden) systemNotify(`🔴 เหตุการณ์ระดับสูง · ${m.name}`, m.text || m.place || 'แตะเพื่อดู', 'incident-high', true);
+  sheet(`<div id="hiAlert" style="text-align:center"><div class="redlight big"><i></i>เหตุการณ์ระดับสูง</div>
+    <h3 style="margin:10px 0 4px">${esc(m.name)}${m.dept ? ` <small class="muted">${esc(m.dept)}</small>` : ''}</h3>
+    ${m.text ? `<p style="font-size:17px;margin:6px 0">${esc(m.text)}</p>` : ''}${m.place ? `<p class="muted" style="margin:4px 0 14px">${icon('pin')} ${esc(m.place)}</p>` : ''}
+    <button class="btn primary" type="button" id="hiView">ดูรายละเอียด</button></div>`, () => { $('hiView').onclick = () => { closeSheet(); go('incidents'); }; });
+}
 async function refreshIncidentBadge() {
   if (!ACC()) return;
-  try { const rows = await api('/api/incidents'); const seen = Number(lsGet('walkie_inc_seen') || 0); S.incNew = rows.filter(r => r.ts > seen && r.user_id !== S.user?.id && !r.done_at).length; renderBadges(); } catch {}
+  try { const rows = await api('/api/incidents'); const seen = Number(lsGet('walkie_inc_seen') || 0); S.incNew = rows.filter(r => r.ts > seen && r.user_id !== S.user?.id && !r.done_at).length; S.incHot = rows.filter(r => r.level === 'high' && !r.done_at).length; renderBadges(); } catch {}
 }
 ROUTES.incidents = async p => {
   const tab = p.tab || 'open';
@@ -1795,7 +1817,7 @@ ROUTES.incidents = async p => {
     <div class="tabs"><button data-t="open" class="${tab === 'open' ? 'on' : ''}">ยังไม่แก้ไข</button><button data-t="all" class="${tab === 'all' ? 'on' : ''}">ทั้งหมด</button><button data-t="mine" class="${tab === 'mine' ? 'on' : ''}">ของฉัน</button></div>
     <div class="scroll"><div style="padding:6px 14px 0"><button class="btn primary" id="incNew2" type="button">${icon('camera')}รายงานสิ่งผิดปกติ</button></div>
     <div id="incList" class="incs"><div class="empty">กำลังโหลด…</div></div>
-    <p class="small muted" style="padding:0 18px 18px;text-align:center">ทุกคนเห็น · เก็บไว้ 30 วัน</p></div></div>`, root => {
+    <p class="small muted" style="padding:0 18px 18px;text-align:center">ทุกคนเห็น · เก็บไว้ 7 วัน</p></div></div>`, root => {
     bindBack(root);
     for (const x of $$('[data-t]', root)) x.onclick = () => go('incidents', { tab: x.dataset.t }, true);
     $('incNew').onclick = $('incNew2').onclick = () => incidentSheet();
@@ -1803,19 +1825,22 @@ ROUTES.incidents = async p => {
   let rows = [];
   try { rows = await api('/api/incidents'); } catch (e) { if ($('incList')) $('incList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   if (!$('incList') || S.route !== 'incidents') return;
-  lsSet('walkie_inc_seen', String(Date.now())); S.incNew = 0; renderBadges();
+  lsSet('walkie_inc_seen', String(Date.now())); S.incNew = 0; S.incHot = rows.filter(r => r.level === 'high' && !r.done_at).length; renderBadges();
   const me = S.user || {}, boss = me.role === 'admin' || me.role === 'lead';
-  const list = rows.filter(r => tab === 'all' ? true : tab === 'mine' ? r.user_id === me.id : !r.done_at);
+  const rank = { high: 0, medium: 1, low: 2 };
+  const list = rows.filter(r => tab === 'all' ? true : tab === 'mine' ? r.user_id === me.id : !r.done_at)
+    .sort((a, b) => (tab === 'open' ? (rank[a.level] ?? 2) - (rank[b.level] ?? 2) : 0) || b.id - a.id);
   const el = $('incList');
-  el.innerHTML = list.length ? list.map(r => `<article class="inc ${r.done_at ? 'done' : ''}" data-i="${r.id}">
+  el.innerHTML = list.length ? list.map(r => `<article class="inc lv-${r.level || 'low'} ${r.done_at ? 'done' : r.level === 'high' ? 'hot' : ''}" data-i="${r.id}">${!r.done_at && r.level === 'high' ? '<div class="redlight"><i></i>เหตุการณ์ระดับสูง · รอคนโพสต์ปิดเหตุการณ์</div>' : ''}
       <div class="inchd">${avatar({ id: r.user_id, name: r.name, has_avatar: r.has_avatar }, 'av')}<div class="grow"><b>${esc(r.name || '—')}</b><small>${esc(r.dept || '')}${r.dept ? ' · ' : ''}${agoText(r.ts)}</small></div>
-        ${r.done_at ? `<span class="pill ok">${icon('check')}แก้ไขแล้ว</span>` : '<span class="pill warn">รอแก้ไข</span>'}</div>
+        <div class="incpills">${lvPill(r.level)}${r.done_at ? `<span class="pill ok">${icon('check')}แก้ไขแล้ว</span>` : '<span class="pill warn">รอแก้ไข</span>'}</div></div>
       ${r.text ? `<p class="inctx">${esc(r.text)}</p>` : ''}
       ${r.place || (r.lat != null) ? `<div class="incpl">${icon('pin')}${esc(r.place || '')}${r.lat != null ? ` <a href="https://maps.google.com/?q=${r.lat},${r.lng}" target="_blank" rel="noopener">ดูแผนที่</a>` : ''}</div>` : ''}
       ${r.thumb ? `<button class="incph" type="button" data-ph="${r.id}" aria-label="ดูรูปเต็ม"><img src="${r.thumb}" alt="รูปเหตุการณ์"></button>` : ''}
-      ${r.done_at && r.done_name ? `<small class="muted">แก้ไขแล้วโดย ${esc(r.done_name)} · ${agoText(r.done_at)}</small>` : ''}
+      ${r.done_at && r.done_name ? `<small class="muted">ปิดเหตุการณ์โดย ${esc(r.done_name)} · ${agoText(r.done_at)}</small>` : ''}
       <div class="incact">
-        ${r.user_id === me.id || boss ? `<button class="btn sm" type="button" data-done="${r.id}" data-v="${r.done_at ? 0 : 1}">${r.done_at ? 'ยังไม่แก้ไข' : icon('check') + 'แก้ไขแล้ว'}</button>` : ''}
+        <button class="btn sm ghostb" type="button" data-cm="${r.id}">${icon('chat')}ความคิดเห็น${r.comments ? ` (${r.comments})` : ''}</button>
+        ${r.user_id === me.id || boss ? `<button class="btn sm ${!r.done_at ? 'okbig' : ''}" type="button" data-done="${r.id}" data-v="${r.done_at ? 0 : 1}">${r.done_at ? 'เปิดเหตุการณ์อีกครั้ง' : icon('check') + 'ปิดเหตุการณ์ (ปกติแล้ว)'}</button>` : ''}
         ${r.user_id === me.id || me.role === 'admin' ? `<button class="btn sm ghost" type="button" data-del="${r.id}">${icon('trash')}ลบ</button>` : ''}
       </div></article>`).join('')
     : `<div class="empty">${tab === 'open' ? 'ไม่มีเหตุการณ์ที่รอแก้ไข' : 'ยังไม่มีรายงาน'}</div>`;
@@ -1823,28 +1848,56 @@ ROUTES.incidents = async p => {
     sheet('<div class="empty">กำลังโหลดรูป…</div>');
     try { const d = await api(`/api/incidents/${b.dataset.ph}/photo`); sheet(`<img src="${d.photo}" alt="รูปเหตุการณ์" style="width:100%;border-radius:14px;display:block">`); } catch (e) { closeSheet(); toast(e.message); }
   };
-  for (const b of $$('[data-done]', el)) b.onclick = async () => { try { await api(`/api/incidents/${b.dataset.done}`, { method: 'PATCH', body: { done: b.dataset.v === '1' } }); render(); } catch (e) { toast(e.message); } };
+  for (const b of $$('[data-done]', el)) b.onclick = async () => { if (b.dataset.v === '1' && !confirm('ปิดเหตุการณ์ ยืนยันว่าปกติแล้ว?')) return; try { await api(`/api/incidents/${b.dataset.done}`, { method: 'PATCH', body: { done: b.dataset.v === '1' } }); render(); } catch (e) { toast(e.message); } };
+  for (const b of $$('[data-cm]', el)) b.onclick = () => incidentComments(rows.find(r => r.id === Number(b.dataset.cm)));
   for (const b of $$('[data-del]', el)) b.onclick = async () => { if (!confirm('ลบรายงานนี้?')) return; try { await api(`/api/incidents/${b.dataset.del}`, { method: 'DELETE' }); render(); } catch (e) { toast(e.message); } };
 };
+async function incidentComments(r) {
+  if (!r) return;
+  const me = S.user || {};
+  const draw = list => `<h3 style="margin-bottom:4px">ความคิดเห็น</h3><p class="small muted" style="margin:0 0 10px">${esc(r.name || '')}: ${esc((r.text || r.place || 'รูปเหตุการณ์').slice(0, 80))}</p>
+    <div class="cmlist" id="cmList">${list.length ? list.map(c => `<div class="cm ${c.user_id === me.id ? 'mine' : ''}">${avatar({ id: c.user_id, name: c.name, has_avatar: c.has_avatar }, 'av')}<div class="grow"><b>${esc(c.name || '—')}</b> <small class="muted">${agoText(c.ts)}</small><div>${esc(c.text)}</div></div></div>`).join('') : '<div class="empty">ยังไม่มีความคิดเห็น</div>'}</div>
+    <div class="cmin"><div class="field plain grow"><input id="cmTx" maxlength="500" placeholder="พิมพ์ความคิดเห็น…"></div><button class="ib send" type="button" id="cmGo" aria-label="ส่งความคิดเห็น">${icon('send')}</button></div>`;
+  const load = async () => { try { return await api(`/api/incidents/${r.id}/comments`); } catch (e) { toast(e.message); return []; } };
+  const open = list => sheet(draw(list), () => {
+    const box = $('cmList'); box.scrollTop = box.scrollHeight;
+    const send = async () => {
+      const t = $('cmTx').value.trim(); if (!t) return;
+      $('cmGo').disabled = true;
+      try { await api(`/api/incidents/${r.id}/comments`, { method: 'POST', body: { text: t } }); r.comments = (r.comments || 0) + 1; open(await load()); const cb = document.querySelector(`[data-cm="${r.id}"]`); if (cb) cb.innerHTML = icon('chat') + `ความคิดเห็น (${r.comments})`; }
+      catch (e) { toast(e.message); $('cmGo').disabled = false; }
+    };
+    $('cmGo').onclick = send; $('cmTx').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); send(); } };
+  });
+  S.cmOpen = r.id; open(await load());
+}
 function incidentSheet() {
-  const d = { photo: null, thumb: null, lat: null, lng: null };
+  const d = { photo: null, thumb: null, lat: null, lng: null, level: 'low' };
   sheet(`<h3>รายงานสิ่งผิดปกติ</h3>
     <div class="incpick"><button class="btn" type="button" id="iCam">${icon('camera')}ถ่ายรูป</button><button class="btn" type="button" id="iGal">เลือกรูป</button></div>
     <div id="iPrev" class="incprev hidden"></div>
+    <label class="lbl">ระดับ</label><div class="lvpick" role="radiogroup" aria-label="ระดับ">
+      <button type="button" class="lv-low on" data-lv="low" role="radio" aria-checked="true">ต่ำ</button>
+      <button type="button" class="lv-med" data-lv="medium" role="radio" aria-checked="false">ปานกลาง</button>
+      <button type="button" class="lv-high" data-lv="high" role="radio" aria-checked="false">สูง</button></div>
+    <p class="small muted" id="lvHint" style="margin:4px 2px 10px">ต่ำ = แจ้งให้ทราบ</p>
     <label class="lbl" for="iTx">เกิดอะไรขึ้น</label><div class="field plain"><textarea id="iTx" rows="3" maxlength="1000" placeholder="เช่น ท่อไอน้ำรั่ว มีควันออก"></textarea></div>
     <label class="lbl" for="iPl">ที่ไหน (ไม่ใส่ก็ได้)</label><div class="field plain"><input id="iPl" maxlength="120" placeholder="เช่น หม้อไอน้ำ 2 ชั้นล่าง"></div>
     <p class="small muted" id="iGps" style="margin:6px 2px 12px"></p>
     <button class="btn primary" type="button" id="iSend">${icon('send')}โพสต์</button>`, () => {
     const prev = () => { const p = $('iPrev'); if (!p) return; p.classList.toggle('hidden', !d.thumb); p.innerHTML = d.thumb ? `<img src="${d.thumb}" alt=""><button class="ib" type="button" id="iRm" aria-label="เอารูปออก">${icon('x')}</button>` : ''; const x = $('iRm'); if (x) x.onclick = () => { d.photo = d.thumb = null; prev(); }; };
     const got = full => { d.photo = full; const im = new Image(); im.onload = () => { const c = document.createElement('canvas'), k = Math.min(1, 360 / Math.max(im.width, im.height)); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); d.thumb = c.toDataURL('image/jpeg', 0.6); prev(); }; im.src = full; };
+    const HINT = { low: 'ต่ำ = แจ้งให้ทราบ', medium: 'ปานกลาง = ควรแก้ไขเร็ว', high: 'สูง = เตือนทุกคนทันที ไฟแดงค้างจนกว่าคุณจะปิดเหตุการณ์' };
+    for (const x of $$('[data-lv]')) x.onclick = () => { d.level = x.dataset.lv; for (const y of $$('[data-lv]')) { y.classList.toggle('on', y === x); y.setAttribute('aria-checked', String(y === x)); } $('lvHint').textContent = HINT[d.level]; };
     $('iCam').onclick = () => pickImage(1280, got, 0.72, { camera: 'back' });
     $('iGal').onclick = () => pickImage(1280, got, 0.72);
     if (navigator.geolocation) { $('iGps').textContent = 'กำลังหาตำแหน่ง…'; navigator.geolocation.getCurrentPosition(r => { d.lat = r.coords.latitude; d.lng = r.coords.longitude; if ($('iGps')) $('iGps').textContent = '📍 แนบตำแหน่ง GPS แล้ว'; }, () => { if ($('iGps')) $('iGps').textContent = ''; }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }); }
     $('iSend').onclick = async () => {
       const text = $('iTx').value.trim(), place = $('iPl').value.trim();
       if (!text && !d.photo) return toast('ใส่ข้อความหรือรูปอย่างน้อย 1 อย่าง');
+      if (d.level === 'high' && !confirm('ระดับสูง จะเตือนทุกคนทันที ยืนยันโพสต์?')) return;
       const b = $('iSend'); b.disabled = true; b.textContent = 'กำลังโพสต์…';
-      try { await api('/api/incidents', { method: 'POST', body: { text, place, photo: d.photo, thumb: d.thumb, lat: d.lat, lng: d.lng } }); closeSheet(); toast('โพสต์แล้ว ทุกคนเห็นแล้ว'); if (S.route === 'incidents') render(); else go('incidents'); }
+      try { await api('/api/incidents', { method: 'POST', body: { text, place, level: d.level, photo: d.photo, thumb: d.thumb, lat: d.lat, lng: d.lng } }); closeSheet(); toast('โพสต์แล้ว ทุกคนเห็นแล้ว'); if (S.route === 'incidents') render(); else go('incidents'); }
       catch (e) { toast(e.message); b.disabled = false; b.textContent = 'โพสต์'; }
     };
   });
