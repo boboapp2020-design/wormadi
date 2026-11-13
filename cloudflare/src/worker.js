@@ -4,7 +4,7 @@
 //   สิทธิ์: user (พนักงาน) < lead (หัวหน้า: มอบงาน, ปิดเหตุ SOS, ดูรายงาน/log) < admin (ผู้ดูแลระบบ)
 import { WalkieRoom, reactionsFor, EMOJIS, LOBBY } from './room.js';
 import { toWav, compress } from './codec.js';
-import { pushAll, pushReady } from './push.js';
+import { pushAll, pushTo, pushReady } from './push.js';
 import { hashPassword, verifyPassword, createSession, userFromToken, bearer, sha256, roleAtLeast, ROLES, PUBLIC_USER } from './auth.js';
 
 export { WalkieRoom };
@@ -419,6 +419,7 @@ async function api(req, env, url) {
     const msg = { id: mid, ts, channel, kind: 'talk', name: me.name, dept: me.dept || '', uid: '', user_id: me.id, ms, audio: 1, voice: 1 };
     const from = { id: me.id, name: me.name, dept: me.dept || '' };
     const { delivered } = await roomCall(env, '/broadcast', { msg: { type: 'dm', msg, from, to: id }, userIds: [id] });
+    if (!(await roomCall(env, '/online')).some(o => o.id === id)) await pushTo(env, [id]).catch(e => console.error('voice push', e));
     await roomCall(env, '/broadcast', { msg: { type: 'dm', msg, from, to: id, mine: true }, userIds: [me.id] });
     return json({ ok: true, msg, delivered });
   }
@@ -447,9 +448,11 @@ async function api(req, env, url) {
     const { delivered } = await roomCall(env, '/broadcast', { msg: { type: 'dm', msg, from, to: id }, userIds: [id] });
     await roomCall(env, '/broadcast', { msg: { type: 'dm', msg, from, to: id, mine: true }, userIds: [me.id] });   // my other screens
     const online = (await roomCall(env, '/online')).some(o => o.id === id);
-    if (!online)        // they'll see it in notifications when they open the app
+    if (!online) {      // they'll see it in notifications when they open the app + a pop-up on the phone now
       await db.prepare('INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, ?, ?, ?, ?, ?)')
         .bind(ts, id, 'dm', `💬 ${me.name}`, text.slice(0, 120), 'dm:' + me.id).run();
+      await pushTo(env, [id]).catch(e => console.error('dm push', e));
+    }
     return json({ ok: true, msg, delivered });
   }
 
@@ -560,6 +563,15 @@ async function api(req, env, url) {
   }
 
   // ---------------------------------------------------------------- SOS
+  if (p === '/api/push/latest' && m === 'GET') {
+    const now = Date.now();
+    const sos = await db.prepare(`SELECT s.ts, s.place, u.name AS reporter, u.dept AS reporter_dept FROM sos s JOIN users u ON u.id = s.user_id
+      WHERE s.status = 'open' AND s.ts > ? AND s.user_id != ? ORDER BY s.id DESC LIMIT 1`).bind(now - 30 * 60_000, me.id).first();
+    const n = await db.prepare(`SELECT ts, kind, title, body, ref FROM notifications WHERE user_id = ? AND kind = 'dm' AND ts > ? ORDER BY id DESC LIMIT 1`).bind(me.id, now - 30 * 60_000).first();
+    if (sos && (!n || sos.ts >= n.ts)) return json({ kind: 'sos', title: '🚨 แจ้งเหตุฉุกเฉิน', body: `แจ้งโดย ${sos.reporter}${sos.reporter_dept ? ' (' + sos.reporter_dept + ')' : ''}${sos.place ? ' · ' + sos.place : ''}`, url: './#/sos' });
+    if (n) { const from = /^dm:(\d+)$/.exec(n.ref || ''); return json({ kind: n.title.startsWith('🎙') ? 'voice' : 'dm', title: n.title, body: n.body, url: from ? `./#/dm?u=${from[1]}` : './#/notifications', tag: n.ref || 'dm' }); }
+    return json({ kind: 'none' });
+  }
   if (p === '/api/sos' && m === 'GET') {
     const { results } = await db.prepare(
       `SELECT s.*, u.name AS reporter, u.dept AS reporter_dept, (SELECT COUNT(*) FROM sos_acks a WHERE a.sos_id = s.id) AS acks,

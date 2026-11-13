@@ -564,6 +564,22 @@ test('ฝากข้อความเสียง: ส่งถึงคนอ
   assert.ok(!(await call('GET', '/api/voicemail', T['แชทB'])).body.some(x => x.id === d.msg.id), 'ฟังแล้วหายจากรายการ');
 });
 
+test('แจ้งเตือนเด้งตอนปิดแอป: เครื่องถามว่าจะแสดงอะไร -> แชทส่วนตัว / ข้อความเสียง (ไปหน้าแชทของคนส่ง)', async () => {
+  const id = async tk => (await call('GET', '/api/me', tk)).body.user.id;
+  const so = (await call('POST', '/api/login', null, { emp: 't-solo', password: 'pass-t-solo' })).body.token;
+  const [ia, is] = [await id(T['แชทA']), await id(so)];
+  await call('POST', '/api/dm/' + is, T['แชทA'], { text: 'ถึงคนปิดแอป' });
+  let l = (await call('GET', '/api/push/latest', so)).body;
+  assert.equal(l.kind, 'dm', JSON.stringify(l)); assert.ok(l.body.includes('ถึงคนปิดแอป')); assert.equal(l.url, './#/dm?u=' + ia);
+  await sleep(5);
+  const pcm = Buffer.alloc(16000 * 2);
+  const r = await fetch(base + '/api/dm/' + is + '/voice?rate=16000', { method: 'POST', headers: { Authorization: 'Bearer ' + T['แชทA'] }, body: pcm });
+  assert.equal(r.status, 200);
+  l = (await call('GET', '/api/push/latest', so)).body;
+  assert.equal(l.kind, 'voice', JSON.stringify(l)); assert.ok(l.title.includes('แชทA'));
+  assert.equal((await call('GET', '/api/push/latest', T['แชทC'])).body.kind === 'voice', false, 'คนอื่นไม่เห็น');
+});
+
 (async () => {
   let fail = 0;
   for (const [n, f] of tests) {

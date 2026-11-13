@@ -202,6 +202,19 @@ function go(route, params = {}, replace) {
 }
 function back(fallback = 'home') { if (history.length > 1 && S.route !== fallback) history.back(); else go(fallback, {}, true); }
 window.addEventListener('popstate', () => render());
+/** typing anywhere shows only the phone's own keyboard: no saved-entry / address / card suggestions bar above it */
+function noAutofill(el) {
+  if (el.dataset.naf || ['checkbox', 'radio', 'file', 'range', 'hidden'].includes(el.type)) return;
+  el.dataset.naf = '1';
+  if (!el.hasAttribute('autocomplete') || el.getAttribute('autocomplete') === 'on') el.setAttribute('autocomplete', el.type === 'password' ? 'new-password' : 'off');
+  if (!el.name) el.setAttribute('name', 'wm-' + Math.random().toString(36).slice(2, 8));   // no reusable name -> no remembered entries
+  el.setAttribute('data-lpignore', 'true'); el.setAttribute('data-form-type', 'other');
+  el.setAttribute('autocorrect', el.tagName === 'TEXTAREA' || el.id === 'chatIn' ? 'on' : 'off');
+}
+const scanAutofill = root => { for (const el of (root.querySelectorAll ? root.querySelectorAll('input, textarea') : [])) noAutofill(el); };
+new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) { if (n.matches('input, textarea')) noAutofill(n); scanAutofill(n); } })
+  .observe(document.documentElement, { childList: true, subtree: true });
+document.addEventListener('focusin', e => { if (e.target.matches && e.target.matches('input, textarea')) noAutofill(e.target); }, true);
 function render() {
   const [r, q] = location.hash.replace(/^#\//, '').split('?');
   const route = ROUTES[r] ? r : (S.token || S.profile.name ? 'home' : 'splash');
@@ -1988,12 +2001,11 @@ function changeAvatar() {
 ROUTES.profile = () => {
   const u = S.user;
   if (!u) return mount(`<div class="page">${header('ข้อมูลผู้ใช้')}<div class="empty">${esc(S.profile.name)} · ${esc(S.profile.dept)}</div></div>`, r => bindBack(r));
-  mount(`<div class="page">${header('ข้อมูลผู้ใช้')}<div class="scroll">
+  mount(`<div class="page">${header('ข้อมูลส่วนตัว')}<div class="scroll">
     <div class="prof"><div class="bigav">${avatar(u)}<button class="cam" id="cam" aria-label="เปลี่ยนรูปโปรไฟล์">${icon('camera')}</button></div>
-      <button class="btn sm" type="button" id="cam2" style="margin:10px auto 0">${icon('camera')}เปลี่ยนรูปโปรไฟล์</button>
       <h2>${esc(u.name)}</h2><div class="muted">รหัสพนักงาน : ${esc(u.emp)}</div><div data-conn style="display:flex;justify-content:center;align-items:center;gap:6px;color:var(--ok-fg);margin-top:4px"></div></div>
     <div class="list kv">${kv('building', 'แผนก', u.dept)}${kv('brief', 'ตำแหน่ง', u.position)}${kv('antenna', 'ช่องหลัก', u.main_channel_name)}${kv('shield', 'สิทธิ์การใช้งาน', ROLE_NAME[u.role])}</div>
-    <div class="list"><button class="li" id="chpw"><span class="ic" style="background:var(--primary-soft);color:var(--primary-fg)">${icon('lock')}</span><div class="grow t1">เปลี่ยนรหัสผ่าน</div><span class="chev">${icon('chev')}</span></button></div>
+    <div class="list"><button class="li" id="cam2"><span class="ic" style="background:var(--primary-soft);color:var(--primary-fg)">${icon('camera')}</span><div class="grow"><div class="t1">เปลี่ยนรูปโปรไฟล์</div><div class="t2">ถ่ายรูป หรือเลือกจากคลังภาพ</div></div><span class="chev">${icon('chev')}</span></button><button class="li" id="chpw"><span class="ic" style="background:var(--primary-soft);color:var(--primary-fg)">${icon('lock')}</span><div class="grow t1">เปลี่ยนรหัสผ่าน</div><span class="chev">${icon('chev')}</span></button></div>
   </div></div>`, root => {
     bindBack(root, 'settings'); setConn(S.conn);
     $('cam').onclick = $('cam2').onclick = changeAvatar;
@@ -2054,15 +2066,14 @@ ROUTES.settings = () => {
     <button class="card row" id="sProf" style="margin:14px;padding:14px;width:calc(100% - 28px);text-align:left;color:var(--text)">${avatar(S.user || u)}
       <div class="grow"><b style="font-size:19px">${esc(u.name)}</b><div class="small muted">${S.user ? `รหัส ${esc(S.user.emp)} · ` : ''}${esc(u.dept || '')}</div></div>${icon('chev')}</button>
     <div class="list">
-      ${row('sInfo', 'user', 'ข้อมูลส่วนตัว')}
-      ${S.user ? row('sPhoto', 'camera', 'เปลี่ยนรูปโปรไฟล์', 'ถ่ายรูป หรือเลือกจากคลังภาพ') : ''}
+      ${row('sInfo', 'user', 'ข้อมูลส่วนตัว', S.user ? 'รูปโปรไฟล์ · รหัสผ่าน · แผนก' : '')}
       ${row('sNotif', 'bell', 'การแจ้งเตือน', 'Notification' in window ? (Notification.permission === 'granted' ? 'เปิดอยู่' : Notification.permission === 'denied' ? 'ถูกปิดในเบราว์เซอร์' : 'แตะเพื่ออนุญาต') : 'เบราว์เซอร์ไม่รองรับ')}
       ${row('sAudio', 'headset', 'ตั้งค่าเสียงและปุ่มพูด', 'เสียงบี๊บ ระดับเสียง ลดเสียงรบกวน และวิธีกดพูด')}
       ${row('sLang', 'globe', 'ภาษา', '', '<span class="small muted">ไทย</span>')}
       ${row('sTheme', curTheme() === 'dark' ? 'moon' : 'sun', 'ธีม', '', `<span class="small muted">${curTheme() === 'dark' ? 'กลางคืน (มืด)' : 'ภาคสนาม (สว่าง)'}</span>`)}
       <label class="setrow web-only">${icon('sun', 'i lead')}<div class="grow"><b>ให้จอติดค้างไว้</b><small>จอไม่ดับขณะเปิดแอป จะได้ยินเสียงแน่นอนที่สุด (กินแบตเพิ่ม)</small></div><input type="checkbox" class="sw" id="optWake" ${wakeOn() ? 'checked' : ''}></label>
       <div class="setrow" style="background:color-mix(in srgb, #cf2020 8%, transparent)">${icon('siren', 'i lead')}<div class="grow"><b>เหตุฉุกเฉิน (SOS) ดังเสมอ</b><small>ดังเสมอเมื่อเข้าสู่ระบบ${pushState() === 'off' ? ' · <b style="color:var(--err-fg)">ยังไม่ได้อนุญาตการแจ้งเตือน</b>' : ''}</small></div>${pushState() === 'off' ? '<button class="btn sm primary" id="sPush" type="button">อนุญาต</button>' : '<span class="small muted">เปิดอยู่</span>'}</div>
-      <div class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินตลอดเวลา</b><small>${NATIVE ? 'แม้พับหรือปิดแอป · หยุดเมื่อออกจากระบบเท่านั้น' : IOS ? 'เมื่อพับแอป (iPhone อาจหยุดเมื่อพับนาน) · หยุดเมื่อออกจากระบบ' : 'เมื่อพับแอปหรือปิดจอ · ถ้าปัดปิดแอปทิ้ง ต้องใช้แอป Android · หยุดเมื่อออกจากระบบ'}</small></div></div>
+      <label class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินตลอดเวลา</b><small>${NATIVE ? 'แม้พับหรือปิดแอป · ปิดสวิตช์ = เงียบเมื่อออกจากหน้าแอป' : IOS ? 'เมื่อพับแอป (iPhone อาจหยุดเมื่อพับนาน) · ปิดสวิตช์ = เงียบเมื่อพับแอป' : 'เมื่อพับแอปหรือปิดจอ · ถ้าปัดปิดแอปทิ้ง ต้องใช้แอป Android · ปิดสวิตช์ = เงียบเมื่อพับแอป'}</small></div><input type="checkbox" class="sw" id="optKeep" ${keepOn() ? 'checked' : ''}></label>
       ${!NATIVE && !standalone() ? row('sInstall', 'download', 'ติดตั้งแอปลงหน้าจอ', installEvt ? 'แตะเพื่อติดตั้ง ใช้งานเต็มจอเหมือนแอป' : IOS ? 'Safari: ปุ่มแชร์ > เพิ่มไปยังหน้าจอโฮม' : 'แตะเพื่อดูวิธีติดตั้ง') : ''}
       ${NATIVE ? row('sBatt', 'battery', 'ให้แอปทำงานตอนจอดับ', 'ปิดการประหยัดแบตเตอรี่') : ''}
     </div>
@@ -2082,7 +2093,7 @@ ROUTES.settings = () => {
     </div></div></div>`, root => {
     bindBack(root);
     const on = (id, fn) => { const b = $(id); if (b) b.onclick = fn; };
-    on('sProf', () => go('profile')); on('sPhoto', changeAvatar); on('sInfo', () => go('profile')); on('sAudio', () => go('audio'));
+    on('sProf', () => go('profile')); on('sInfo', () => go('profile')); on('sAudio', () => go('audio'));
     on('sNotif', async () => { if ('Notification' in window && Notification.permission === 'default') { await Notification.requestPermission(); render(); } else if (NATIVE) WN.openAppSettings(); else toast('ตั้งค่าการแจ้งเตือนได้ที่การตั้งค่าเว็บไซต์ของเบราว์เซอร์'); });
     on('sLang', () => toast('ตอนนี้รองรับภาษาไทย'));
     on('sTheme', () => { applyTheme(curTheme() === 'dark' ? 'light' : 'dark', true); render(); });
@@ -2090,6 +2101,7 @@ ROUTES.settings = () => {
     on('sInvite', invite); on('sMembers', () => ACC() ? go('members') : toast('ใช้ได้เมื่อใช้เซิร์ฟเวอร์ Cloudflare'));
     on('sReport', () => go('report')); on('sLog', () => { location.href = (serverBase || '') + '/log.html'; }); on('sAdmin', () => go('admin'));
     on('sApk', () => { location.href = APK_URL; });
+    const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); toast(k.checked ? 'ได้ยินตลอดเวลา: เปิด' : 'ได้ยินตลอดเวลา: ปิด (เหตุฉุกเฉินยังดังตามปกติ)'); };
     on('sCodes', radioCodes); on('sHelp', help); on('sAbout', about);
     on('sOut', () => { if (confirm('ออกจากระบบ?')) signOut(); });
     const w = $('optWake'); if (w) w.onchange = () => { lsSet('walkie_wake', w.checked ? '1' : '0'); setWake(w.checked); };
@@ -2356,7 +2368,7 @@ function bindInstallBar(root) {
 function renderInstallBars() { for (const el of $$('[data-install]')) { const h = installBar(); if (h) { el.outerHTML = h; } else el.remove(); } bindInstallBar(document); }
 if (!NATIVE && 'serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
 let wakeLock = null, keepAudio = null;
-const wakeOn = () => lsGet('walkie_wake') === '1', keepOn = () => true;   // always listening while signed in; only logging out stops it
+const wakeOn = () => lsGet('walkie_wake') === '1', keepOn = () => lsGet('walkie_keep') !== '0';   // listening in the background: on unless switched off
 async function setWake(on) {
   if (on && 'wakeLock' in navigator && !document.hidden) { try { wakeLock = await navigator.wakeLock.request('screen'); } catch {} }
   else if (!on && wakeLock) { try { await wakeLock.release(); } catch {} wakeLock = null; }

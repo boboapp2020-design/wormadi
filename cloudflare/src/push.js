@@ -24,8 +24,19 @@ export const pushReady = env => !!(env.VAPID_PUBLIC && env.VAPID_PRIVATE_JWK);
 /** wake every subscribed device (except `exceptUserId`); removes subscriptions the push service says are gone */
 export async function pushAll(env, { exceptUserId = null, urgency = 'high', ttl = 3600 } = {}) {
   if (!pushReady(env)) return { sent: 0, ready: false };
+  const { results } = await env.DB.prepare('SELECT endpoint FROM push_subs WHERE user_id IS NOT ?').bind(exceptUserId).all();
+  return send(env, results, urgency, ttl);
+}
+
+/** wake only these people's devices (private chat / voice message while their app is closed) */
+export async function pushTo(env, userIds, { urgency = 'high', ttl = 86400 } = {}) {
+  if (!pushReady(env) || !userIds.length) return { sent: 0, ready: pushReady(env) };
+  const { results } = await env.DB.prepare(`SELECT endpoint FROM push_subs WHERE user_id IN (${userIds.map(() => '?').join(',')})`).bind(...userIds).all();
+  return send(env, results, urgency, ttl);
+}
+
+async function send(env, results, urgency, ttl) {
   const db = env.DB;
-  const { results } = await db.prepare('SELECT endpoint FROM push_subs WHERE user_id IS NOT ?').bind(exceptUserId).all();
   let sent = 0;
   await Promise.allSettled(results.map(async ({ endpoint }) => {
     try {

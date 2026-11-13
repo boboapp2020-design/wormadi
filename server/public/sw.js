@@ -1,6 +1,6 @@
 // Service worker: ให้ติดตั้งเป็นแอปได้ เปิดหน้าแอปได้แม้เน็ตแกว่ง และกดแจ้งเตือนแล้วกลับเข้าแอป
 // หน้าเว็บ: ลองเน็ตก่อน (ได้เวอร์ชันใหม่เสมอ) ถ้าไม่มีเน็ตใช้ของที่เก็บไว้ · /api และ WebSocket ไม่ผ่าน cache
-const CACHE = 'wormadi-v27';
+const CACHE = 'wormadi-v28';
 // (index.html / log.html are cached when visited: Cloudflare redirects *.html to clean URLs)
 const SHELL = ['./', 'theme.css', 'app.css', 'app.js', 'manifest.webmanifest', 'vendor/qrcode.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-180.png', 'brand/logo.png', 'brand/app-icon.png', 'brand/wordmark.png'];
@@ -40,18 +40,22 @@ const kv = key => new Promise(res => {
 });
 self.addEventListener('push', e => {
   e.waitUntil((async () => {
-    let title = '🚨 แจ้งเหตุฉุกเฉิน', body = 'มีการแจ้งเหตุฉุกเฉิน แตะเพื่อเปิดแอป';
     const auth = await kv('auth');
     if (!auth || !auth.token) return;                   // logged out on this device: no alerts
+    let d = null;
     try {
-      const r = await fetch(auth.base + '/api/sos', { headers: { Authorization: 'Bearer ' + auth.token }, cache: 'no-store' });
-      if (r.ok) {
-        const s = (await r.json()).find(x => x.status === 'open');
-        if (s) body = `แจ้งโดย ${s.reporter}${s.reporter_dept ? ' (' + s.reporter_dept + ')' : ''}${s.place ? ' · ' + s.place : ''}`;
-      }
+      const r = await fetch(auth.base + '/api/push/latest', { headers: { Authorization: 'Bearer ' + auth.token }, cache: 'no-store' });
+      if (r.ok) d = await r.json();
     } catch {}
-    await self.registration.showNotification(title, {
-      body, tag: 'wormadi-sos', renotify: true, requireInteraction: true,
+    if (d && (d.kind === 'dm' || d.kind === 'voice')) {
+      return self.registration.showNotification(d.title, {
+        body: d.kind === 'voice' ? d.body + ' · แตะเพื่อฟัง' : d.body, tag: 'wormadi-' + (d.tag || 'dm'), renotify: true,
+        vibrate: [200, 100, 200], icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', data: { url: d.url },
+      });
+    }
+    // SOS (or the server could not be reached: treat it as urgent)
+    await self.registration.showNotification((d && d.kind === 'sos' && d.title) || '🚨 แจ้งเหตุฉุกเฉิน', {
+      body: (d && d.kind === 'sos' && d.body) || 'มีการแจ้งเตือนสำคัญ แตะเพื่อเปิดแอป', tag: 'wormadi-sos', renotify: true, requireInteraction: true,
       vibrate: [700, 300, 700, 300, 700, 300, 700, 300, 700],
       icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', data: { url: './#/sos' },
     });
