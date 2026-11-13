@@ -616,23 +616,21 @@ test('เกมดวลหมากฮอส: เริ่มเกม · เ�
   assert.equal((await call('POST', g + '/resign', T['แชทB'])).status, 200);
   const e = (await call('GET', g, T['แชทA'])).body; assert.equal(e.status, 'done'); assert.equal(e.winner, e.p1); assert.equal(e.result, 'resign');
 });
-test('กติกาหมากฮอสสากล (ตรรกะ): บังคับกิน · กินถอยหลังได้ · กินมากที่สุด · โคนบินกิน · จบตาที่แถวสุดท้ายเป็นโคน', async () => {
+test('กติกาหมากฮอสไทย (ตรรกะ): 8 ตัว · ต้องกิน · ลูกธรรมดากินถอยหลังไม่ได้ · กินต่อเนื่อง · โคนบินกิน · ถึงแถวสุดท้ายเป็นโคน', async () => {
   const G = await import(require('url').pathToFileURL(require('path').join(__dirname, '..', 'src', 'games.js')).href);
-  const empty = () => Array.from({ length: 10 }, () => Array(10).fill(''));
+  const empty = () => Array.from({ length: 8 }, () => Array(8).fill(''));
   const st = G.checkersStart();
-  assert.equal(st.b.flat().filter(x => x === 'a').length, 20); assert.equal(st.b.flat().filter(x => x === 'b').length, 20);
-  assert.equal(G.legalMoves(st.b, 1).length, 9, 'เริ่มเกม: ฝั่งล่างเดินได้ 9 ทาง');
-  let b = empty(); b[5][2] = 'a'; b[4][3] = 'b'; b[9][0] = 'a';
+  assert.equal(st.b.flat().filter(x => x === 'a').length, 8); assert.equal(st.b.flat().filter(x => x === 'b').length, 8);
+  assert.equal(G.legalMoves(st.b, 1).length, 7, 'เริ่มเกม: ฝั่งล่างเดินได้ 7 ทาง');
+  let b = empty(); b[5][2] = 'a'; b[4][3] = 'b'; b[7][0] = 'a';
   assert.ok(G.legalMoves(b, 1).every(m => m.caps.length), 'ต้องกินเท่านั้น');
-  b = empty(); b[3][3] = 'a'; b[4][4] = 'b'; b[0][1] = 'b';                      // ลูกธรรมดากินถอยหลังได้
-  assert.ok(G.legalMoves(b, 1).some(m => m.caps.length === 1 && m.path[1][0] === 5), 'กินถอยหลัง');
-  b = empty(); b[9][0] = 'a'; b[8][1] = 'b'; b[6][3] = 'b'; b[0][7] = 'b';       // กินสองตัวต่อเนื่อง
-  let mv = G.legalMoves(b, 1); assert.deepEqual(mv[0].path, [[9, 0], [7, 2], [5, 4]]); assert.equal(mv[0].caps.length, 2);
-  b = empty(); b[9][4] = 'a'; b[8][3] = 'b'; b[6][1] = 'b'; b[8][5] = 'b'; b[0][1] = 'b';   // มีทางกิน 1 ตัว (ขวา) กับ 2 ตัว (ซ้าย) → ต้องเลือก 2 ตัว
-  mv = G.legalMoves(b, 1); assert.ok(mv.length >= 1 && mv.every(m => m.caps.length === 2), 'ต้องเลือกทางที่กินมากที่สุด');
-  b = empty(); b[9][0] = 'A'; b[6][3] = 'b'; b[0][1] = 'b';                      // โคนบินกินข้ามระยะไกล
-  mv = G.legalMoves(b, 1); assert.ok(mv.length >= 3 && mv.every(m => m.caps.length === 1), 'โคนบินกิน');
-  b = empty(); b[1][2] = 'a'; b[0][9] = 'b';                                      // จบตาที่แถวสุดท้าย = โคน
+  b = empty(); b[3][3] = 'a'; b[4][4] = 'b'; b[0][1] = 'b';                      // ลูกธรรมดากินถอยหลังไม่ได้
+  assert.ok(G.legalMoves(b, 1).every(m => !m.caps.length), 'กินถอยหลังไม่ได้');
+  b = empty(); b[7][0] = 'a'; b[6][1] = 'b'; b[4][3] = 'b'; b[0][7] = 'b';       // กินสองตัวต่อเนื่อง
+  let mv = G.legalMoves(b, 1); assert.deepEqual(mv[0].path, [[7, 0], [5, 2], [3, 4]]); assert.equal(mv[0].caps.length, 2);
+  b = empty(); b[7][0] = 'A'; b[4][3] = 'b'; b[0][1] = 'b';                      // โคนบินกิน ลงได้หลายช่องถัดไป
+  mv = G.legalMoves(b, 1); assert.deepEqual(mv.map(m => m.path[1].join()).sort(), ['0,7', '1,6', '2,5', '3,4']);
+  b = empty(); b[1][2] = 'a'; b[0][7] = 'b';                                      // จบตาที่แถวสุดท้าย = โคน
   assert.equal(G.applyMove('checkers', { b, q: 0 }, 1, { path: [[1, 2], [0, 1]] }).state.b[0][1], 'A');
   b = empty(); b[5][2] = 'a'; b[4][3] = 'b';                                      // กินตัวสุดท้าย = ชนะ
   assert.deepEqual(G.applyMove('checkers', { b, q: 0 }, 1, { path: [[5, 2], [3, 4]] }).end, { winner: 1 });

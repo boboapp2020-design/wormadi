@@ -667,8 +667,9 @@ function renderAirBar(t, where) {
   if (!t || S.route === 'ptt' || !S.me) { if (el) el.remove(); return; }
   if (!el) { el = document.createElement('button'); el.id = 'airBar'; el.type = 'button'; el.className = 'airbar'; document.body.appendChild(el); }
   el.innerHTML = `${icon('volume')}<span class="grow"><b>${esc(t)}</b> กำลังพูด${where ? ` · ${esc(where)}` : ''}${locked && !S.skipRx ? '<small>แตะเพื่อเปิดเสียง</small>' : ''}</span>`;
-  el.onclick = () => { ensureCtx(); go('ptt'); };
-  const nav = document.querySelector('nav.nav'); el.style.bottom = (nav ? Math.round(nav.getBoundingClientRect().height) + 12 : 16) + 'px';   // just above the bottom tabs
+  el.onclick = () => { ensureCtx(); if (S.route !== 'game') go('ptt'); };     // in a game: just unlock the sound, stay on the board
+  el.classList.toggle('top', S.route === 'game');
+  const nav = document.querySelector('nav.nav'); if (S.route === 'game') el.style.bottom = 'auto'; else el.style.bottom = (nav ? Math.round(nav.getBoundingClientRect().height) + 12 : 16) + 'px';   // just above the bottom tabs
 }
 const levels = new Array(48).fill(0);
 let lastLevel = 0;
@@ -1656,12 +1657,12 @@ function userSheet(u) {
 }
 const kv = (ic, k, v) => `<div class="li">${`<span class="ic">${icon(ic)}</span>`}<div class="grow"><div class="t1">${k}</div><div class="t2">${esc(v || '-')}</div></div></div>`;
 
-// ---------------------------------------------------------------- duel games (XO / หมากฮอสสากล): invite from a friend's profile, they must accept
+// ---------------------------------------------------------------- duel games (XO / หมากฮอสไทย): invite from a friend's profile, they must accept
 const GN = { xo: 'XO', checkers: 'หมากฮอส' };
 function gamePickSheet(u) {
   sheet(`<h3>ชวน ${esc(u.name)} เล่นเกม</h3><p class="small muted" style="margin:0 0 10px">เพื่อนต้องกดตอบรับก่อน ถึงจะเริ่มเล่นได้</p>
     <button class="btn" id="gXo" type="button" style="margin-top:8px"><b style="font-size:22px;margin-right:6px">✕ ○</b> XO · 3×3</button>
-    <button class="btn" id="gCk" type="button" style="margin-top:10px">${icon('game')}หมากฮอสสากล · 10×10</button>`, bg => {
+    <button class="btn" id="gCk" type="button" style="margin-top:10px">${icon('game')}หมากฮอสไทย · 8×8</button>`, bg => {
     const go1 = kind => async () => {
       closeSheet();
       try {
@@ -1729,7 +1730,7 @@ ROUTES.game = async p => {
     if (g.status === 'playing' || g.status === 'done') board = g.kind === 'xo' ? xoBoard(myTurn) : checkersBoard(myTurn);
     const mark = g.kind === 'xo' ? `<span class="gp x">✕ ${esc(g.n1)}</span><span class="gp o">○ ${esc(g.n2)}</span>` : `<span class="gp w">⚪ ${esc(g.n1)}</span><span class="gp k">⚫ ${esc(g.n2)}</span>`;
     $('gBody').innerHTML = `<div class="gwrap"><div class="gban ${myTurn ? 'mine' : ''}">${banner}</div>${g.status === 'playing' || g.status === 'done' ? `<div class="gplayers">${mark}</div>` : ''}${board}
-      ${g.kind === 'checkers' && g.status === 'playing' ? '<p class="small muted gnote">กติกาสากล: ต้องกินเสมอ และต้องเลือกทางที่กินได้มากที่สุด · ลูกธรรมดากินถอยหลังได้ · ถึงแถวสุดท้ายเป็นโคน บินได้ไกล</p>' : ''}
+      ${g.kind === 'checkers' && g.status === 'playing' ? '<p class="small muted gnote">กติกาไทย: ต้องกินเสมอ · ลูกธรรมดาเดินและกินไปข้างหน้าเท่านั้น · ถึงแถวสุดท้ายเป็นโคน บินได้ไกล</p>' : ''}
       <div class="gbtns">${btns}</div></div>`;
     const on = (id, f) => { const e = $(id); if (e) e.onclick = f; };
     on('gYes', () => act('accept')); on('gNo', () => act('decline')); on('gCancel', async () => { await act('cancel'); go('games', {}, true); });

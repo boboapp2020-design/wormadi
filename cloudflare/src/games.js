@@ -1,6 +1,6 @@
-// เกมดวลเพื่อน: XO และ หมากฮอสสากล — ตรวจกติกาที่เซิร์ฟเวอร์ทั้งหมด ฝั่งแอปแค่วาดกระดานและส่งตาเดิน
+// เกมดวลเพื่อน: XO และ หมากฮอสไทย — ตรวจกติกาที่เซิร์ฟเวอร์ทั้งหมด ฝั่งแอปแค่วาดกระดานและส่งตาเดิน
 // state: XO       -> { b: [9 ช่อง: '', 'X', 'O'] }          p1 = X เดินก่อน
-//        หมากฮอส  -> { b: [10 แถว][10 ช่อง], q }             p1 = 'a'/'A' (ล่าง เดินขึ้น), p2 = 'b'/'B' (บน เดินลง) · ตัวใหญ่ = โคน
+//        หมากฮอส  -> { b: [8 แถว][8 ช่อง], q }             p1 = 'a'/'A' (ล่าง เดินขึ้น), p2 = 'b'/'B' (บน เดินลง) · ตัวใหญ่ = โคน
 
 export const KINDS = ['xo', 'checkers'];
 
@@ -18,12 +18,12 @@ function xoMove(st, side, mv) {
   return { state: { b } };
 }
 
-// ------------------------------------------------------------------ หมากฮอสสากล (International draughts 10x10)
-// กติกา: 20 ตัวต่อฝ่าย · ลูกธรรมดาเดินเฉียงไปข้างหน้า 1 ช่อง แต่กินได้ทั้งไปหน้าและถอยหลัง · โคนบินเฉียงได้ไกลทั้งเดินและกิน
-//        ต้องกินเสมอ และต้องเลือกทางที่กินได้ "มากตัวที่สุด" · กินต่อเนื่องได้หลายตัวในตาเดียว ห้ามข้ามตัวเดิมสองครั้ง
-//        ตัวที่ถูกกินจะถูกยกออกหลังจบตา · ลูกธรรมดาจะเป็นโคนเมื่อ "จบตา" ที่แถวสุดท้าย (ผ่านเฉยๆ ระหว่างกินไม่นับ)
+// ------------------------------------------------------------------ หมากฮอสไทย (Thai draughts 8x8)
+// กติกา: 8 ตัวต่อฝ่าย (2 แถวหน้า) · ลูกธรรมดาเดิน "และกิน" เฉียงไปข้างหน้าเท่านั้น · ต้องกินเสมอ (ไม่บังคับให้เลือกทางที่กินมากสุด)
+//        กินต่อเนื่องได้หลายตัวในตาเดียว ห้ามข้ามตัวเดิมสองครั้ง · ถึงแถวสุดท้ายแล้ว "จบตา" = เป็นโคน
+//        โคนเดินเฉียงได้ไกลทุกทิศ และกินแบบบิน (ข้ามตัวเดียว ลงช่องว่างช่องใดก็ได้ถัดไป)
 //        ชนะเมื่อฝ่ายตรงข้ามไม่มีตัว หรือเดินไม่ได้ · เสมอเมื่อ 50 ตาติดกันไม่มีการกินและไม่มีลูกธรรมดาเดิน
-const N = 10;
+const N = 8;
 const DIRS = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
 const inb = (r, c) => r >= 0 && r < N && c >= 0 && c < N;
 const owner = ch => (ch === 'a' || ch === 'A' ? 1 : ch === 'b' || ch === 'B' ? 2 : 0);
@@ -31,8 +31,8 @@ const fwd = side => (side === 1 ? -1 : 1);
 const lastRow = side => (side === 1 ? 0 : N - 1);
 export function checkersStart() {
   const b = Array.from({ length: N }, () => Array(N).fill(''));
-  for (let r = 0; r < 4; r++) for (let c = 0; c < N; c++) if ((r + c) % 2 === 1) b[r][c] = 'b';
-  for (let r = N - 4; r < N; r++) for (let c = 0; c < N; c++) if ((r + c) % 2 === 1) b[r][c] = 'a';
+  for (let r = 0; r < 2; r++) for (let c = 0; c < N; c++) if ((r + c) % 2 === 1) b[r][c] = 'b';
+  for (let r = N - 2; r < N; r++) for (let c = 0; c < N; c++) if ((r + c) % 2 === 1) b[r][c] = 'a';
   return { b, q: 0 };
 }
 function captures(b, side, r0, c0) {
@@ -42,6 +42,7 @@ function captures(b, side, r0, c0) {
     let more = false;
     for (const [dr, dc] of DIRS) {
       if (!king) {
+        if (dr !== fwd(side)) continue;                                      // ลูกธรรมดากินได้เฉพาะไปข้างหน้า
         const mr = r + dr, mc = c + dc, lr = r + 2 * dr, lc = c + 2 * dc;
         if (inb(lr, lc) && owner(b[mr][mc]) === foe && !caps.includes(mr * N + mc) && free(lr, lc)) {
           more = true; walk(lr, lc, [...caps, mr * N + mc], [...path, [lr, lc]]);
@@ -81,14 +82,12 @@ export function legalMoves(b, side) {
     if (owner(b[r][c]) !== side) continue;
     caps.push(...captures(b, side, r, c)); simple.push(...steps(b, side, r, c));
   }
-  if (!caps.length) return simple;
-  const most = Math.max(...caps.map(m => m.caps.length));
-  return caps.filter(m => m.caps.length === most);                          // ต้องกิน และต้องกินให้มากที่สุด
+  return caps.length ? caps : simple;                                       // ต้องกินถ้ากินได้
 }
 function checkersMove(st, side, mv) {
   const want = JSON.stringify(mv?.path);
   const legal = legalMoves(st.b, side).find(m => JSON.stringify(m.path) === want);
-  if (!legal) return { error: 'เดินแบบนี้ไม่ได้ (ต้องกิน และต้องเลือกทางที่กินได้มากที่สุด)' };
+  if (!legal) return { error: 'เดินแบบนี้ไม่ได้ (ถ้ามีตัวที่กินได้ ต้องกิน)' };
   const b = st.b.map(row => row.slice()), [r0, c0] = legal.path[0], [r1, c1] = legal.path[legal.path.length - 1];
   const piece = b[r0][c0], man = piece === 'a' || piece === 'b';
   b[r0][c0] = '';
