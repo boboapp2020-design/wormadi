@@ -743,11 +743,24 @@ function addMsgAlert(msg) {
   renderBadges();
   if (document.hidden) systemNotify(`${msg.name} · ${msg.channel}`, msg.kind === 'talk' ? `พูด ${fmtDur(msg.ms)}` : msg.text, 'ch:' + msg.channel);
 }
+/** take chat notifications out of the shade once the chat is read: Android shows the icon dot/number only while one is waiting */
+let clearedAt = 0;
+async function clearChatNotifs(onlyTag) {
+  if (NATIVE || !navigator.serviceWorker) return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration(); if (!reg) return;
+    for (const n of await reg.getNotifications()) {
+      const t = String(n.tag || '').replace(/^wormadi-/, '');
+      if (/^(dm:|ch:)/.test(t) && (!onlyTag || t === onlyTag)) n.close();
+    }
+  } catch {}
+}
 const readSent = {};
 /** tell the server I have read this chat (so it stops counting it as unread, on every device) */
 function chatRead(ch) {
   if (!ACC() || !S.token || !ch || Date.now() - (readSent[ch] || 0) < 1500) return;
-  readSent[ch] = Date.now(); api('/api/chat/read', { method: 'POST', body: { channel: ch } }).catch(() => {});
+  readSent[ch] = Date.now(); clearChatNotifs(isDm(ch) ? 'dm:' + String(ch).split(':').slice(1).find(x => Number(x) !== (S.user && S.user.id)) : 'ch:' + ch);
+  api('/api/chat/read', { method: 'POST', body: { channel: ch } }).catch(() => {});
 }
 function markChannelRead(ch) {
   let c = false;
@@ -758,6 +771,7 @@ function markChannelRead(ch) {
 }
 function renderBadges() {
   const msgs = S.msgAlerts.filter(a => !a.read).length + (S.dmUnread ? dmUnreadTotal() : 0) + Object.values(S.grpUnread || {}).reduce((a, b) => a + b, 0), n = S.unread + msgs;
+  if (!msgs && !document.hidden && Date.now() - clearedAt > 3000) { clearedAt = Date.now(); clearChatNotifs(); }
   idb(st => st.put(msgs, 'unread')).catch(() => {});          // the service worker keeps the icon badge right while the app is closed
   const set = (id, v) => { const b = $(id); if (b) { b.textContent = v > 9 ? '9+' : v; b.classList.toggle('hidden', !v); } };
   set('navMsgBadge', msgs); set('bellBadge', n); set('taskBadge', S.incNew || 0); for (const t of $$('[data-to="incidents"]')) t.classList.toggle('hot', !!S.incHot); set('msgTileBadge', msgs);
