@@ -10,6 +10,7 @@
 import { compress } from './codec.js';
 import { DurableObject } from 'cloudflare:workers';
 import { userFromToken } from './auth.js';
+import { pushTo } from './push.js';
 
 const PING = '{"type":"ping"}';
 const PONG = '{"type":"pong"}';
@@ -161,6 +162,30 @@ export class WalkieRoom extends DurableObject {
     const users = [...byId.values()];
     const msg = { type: 'roster', users, channels: (this.channels || []).map(name => ({ name, users: users.filter(u => u.rooms.includes(name)).length })) };
     for (const ws of this.authed()) this.send(ws, msg);   // also people who are not in a room yet
+  }
+
+  /** a room text message reaches people whose app is closed: a push with the text (at most one per person per room every 2 minutes) */
+  async pushRoomText(room, me, m) {
+    try {
+      const db = this.env.DB; if (!db) return;
+      const online = new Set(); for (const ws of this.authed()) { const c = this.info(ws); if (c.uid) online.add(c.uid); }
+      const ch = await db.prepare('SELECT id, (pass IS NOT NULL) AS locked FROM channels WHERE name = ? AND active = 1').bind(room).first();
+      const now = Date.now(), ref = 'ch:' + room;
+      const lobby = room === LOBBY;
+      if (!lobby && !ch) return;
+      const { results } = await db.prepare(
+        `SELECT DISTINCT p.user_id FROM push_subs p JOIN users u ON u.id = p.user_id AND u.active = 1
+         WHERE p.user_id != ?1 AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = p.user_id AND n.ref = ?2 AND n.ts > ?3)
+           AND (?4 = 1 OR u.main_channel = ?5 OR p.user_id IN (SELECT user_id FROM channel_access WHERE channel_id = ?5)
+                OR (?6 = 0 AND p.user_id IN (SELECT user_id FROM messages WHERE channel = ?7 AND ts > ?8 AND user_id IS NOT NULL)))
+           AND NOT EXISTS (SELECT 1 FROM channel_bans b WHERE b.channel_id = ?5 AND b.user_id = p.user_id)`)
+        .bind(me.uid || 0, ref, now - 120_000, lobby ? 1 : 0, ch ? ch.id : -1, ch && ch.locked ? 1 : 0, room, now - 3 * 86_400_000).all();
+      const ids = results.map(r => r.user_id).filter(id => !online.has(id));
+      if (!ids.length) return;
+      const title = `${me.name} · ${room}`, body = String(m.text || '').slice(0, 140);
+      await db.batch(ids.map(id => db.prepare("INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, ?, 'room', ?, ?, ?)").bind(now, id, title, body, ref)));
+      await pushTo(this.env, ids);
+    } catch (e) { console.error('room push', e); }
   }
 
   publish(ch, msg) {
@@ -474,7 +499,7 @@ export class WalkieRoom extends DurableObject {
         this.setInfo(ws, { ...me, lastChat: now });
         const room = msg.channel && this.roomsOf(me).includes(msg.channel) ? msg.channel : me.channel;
         const m = await this.store({ channel: room, kind: 'text', name: me.name, dept: me.dept, uid: me.devUid, userId: me.uid, text });
-        if (m) this.publish(room, m);
+        if (m) { this.publish(room, m); this.ctx.waitUntil(this.pushRoomText(room, me, m)); }
         break;
       }
       case 'react': {

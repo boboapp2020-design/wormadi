@@ -757,8 +757,9 @@ async function api(req, env, url) {
     const now = Date.now();
     const sos = await db.prepare(`SELECT s.ts, s.place, u.name AS reporter, u.dept AS reporter_dept FROM sos s JOIN users u ON u.id = s.user_id
       WHERE s.status = 'open' AND s.ts > ? AND s.user_id != ? ORDER BY s.id DESC LIMIT 1`).bind(now - 30 * 60_000, me.id).first();
-    const n = await db.prepare(`SELECT ts, kind, title, body, ref FROM notifications WHERE user_id = ? AND kind = 'dm' AND ts > ? ORDER BY id DESC LIMIT 1`).bind(me.id, now - 30 * 60_000).first();
+    const n = await db.prepare(`SELECT ts, kind, title, body, ref FROM notifications WHERE user_id = ? AND kind IN ('dm', 'room') AND ts > ? ORDER BY id DESC LIMIT 1`).bind(me.id, now - 30 * 60_000).first();
     if (sos && (!n || sos.ts >= n.ts)) return json({ kind: 'sos', title: '🚨 แจ้งเหตุฉุกเฉิน', body: `แจ้งโดย ${sos.reporter}${sos.reporter_dept ? ' (' + sos.reporter_dept + ')' : ''}${sos.place ? ' · ' + sos.place : ''}`, url: './#/sos' });
+    if (n && n.kind === 'room') return json({ kind: 'dm', title: n.title, body: n.body, url: './#/convos', tag: n.ref });
     if (n) { const from = /^dm:(\d+)$/.exec(n.ref || ''); return json({ kind: n.title.startsWith('🎙') ? 'voice' : 'dm', title: n.title, body: n.body, url: from ? `./#/dm?u=${from[1]}` : './#/notifications', tag: n.ref || 'dm' }); }
     return json({ kind: 'none' });
   }
