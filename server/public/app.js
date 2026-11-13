@@ -257,6 +257,37 @@ function sheet(html, bind) {
   return bg;
 }
 function closeSheet() { $('sheet')?.remove(); }
+/** themed confirm: replaces the browser's own pop-up; shows on top of bottom sheets and returns a Promise<boolean> */
+function ask(message, o = {}) {
+  return new Promise(res => {
+    $('dlg')?.remove();
+    const bg = document.createElement('div'); bg.className = 'dlg-bg'; bg.id = 'dlg';
+    const lines = String(message).split('\n').map(l => `<p>${esc(l)}</p>`).join('');
+    bg.innerHTML = `<div class="dlg" role="alertdialog" aria-modal="true" aria-labelledby="dlgT">
+      <div class="dlg-ic ${o.danger ? 'danger' : ''}">${icon(o.icon || (o.danger ? 'warn' : 'help'))}</div>
+      <h3 id="dlgT">${esc(o.title || 'ยืนยัน')}</h3>${lines}
+      <div class="dlg-btns"><button class="btn" type="button" id="dlgNo">${esc(o.no || 'ยกเลิก')}</button><button class="btn ${o.danger ? 'dng' : 'primary'}" type="button" id="dlgYes">${esc(o.yes || 'ตกลง')}</button></div></div>`;
+    const key = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); } };
+    const done = v => { document.removeEventListener('keydown', key, true); bg.remove(); res(v); };
+    document.addEventListener('keydown', key, true);
+    bg.addEventListener('click', e => { if (e.target === bg) done(false); });
+    ($('app') || document.body).appendChild(bg);
+    $('dlgNo').onclick = () => done(false); $('dlgYes').onclick = () => done(true);
+    $('dlgYes').focus({ preventScroll: true });
+  });
+}
+/** themed replacement for the browser's "copy this link" prompt */
+function copyLinkDialog(url) {
+  $('dlg')?.remove();
+  const bg = document.createElement('div'); bg.className = 'dlg-bg'; bg.id = 'dlg';
+  bg.innerHTML = `<div class="dlg" role="dialog" aria-modal="true"><div class="dlg-ic">${icon('send')}</div><h3>คัดลอกลิงก์</h3>
+    <p>แตะที่ลิงก์แล้วคัดลอก</p><div class="field plain" style="margin:8px 0 14px"><input id="dlgUrl" readonly value="${esc(url)}"></div>
+    <div class="dlg-btns"><button class="btn primary" type="button" id="dlgYes">ปิด</button></div></div>`;
+  bg.addEventListener('click', e => { if (e.target === bg) bg.remove(); });
+  ($('app') || document.body).appendChild(bg);
+  $('dlgYes').onclick = () => bg.remove();
+  const u = $('dlgUrl'); u.focus(); u.select();
+}
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
 // ================================================================ connection (web)
@@ -1119,7 +1150,7 @@ ROUTES.channels = p => {
       for (const b of $$('[data-share]', root)) b.onclick = () => { const c = S.channels.find(x => String(x.id) === b.dataset.share); if (c) shareRoom(c); };
       for (const d of $$('[data-del]', root)) d.onclick = async () => {
         const c = S.channels.find(x => String(x.id) === d.dataset.del);
-        if (!c || !confirm(`ลบห้อง "${c.name}"?\nทุกคนที่อยู่ในห้องจะถูกย้ายออก`)) return;
+        if (!c || !await ask(`ลบห้อง "${c.name}"?\nทุกคนที่อยู่ในห้องจะถูกย้ายออก`, { title: 'ลบห้อง', yes: 'ลบห้อง', danger: true })) return;
         try { await api(`/api/channels/${c.id}`, { method: 'DELETE' }); toast('ลบห้องแล้ว'); await loadChannels(); draw(); } catch (e) { toast(e.message); }
       };
     };
@@ -1146,7 +1177,7 @@ function shareRoom(c) {
     <button class="btn" id="shCopy" type="button" style="margin-top:10px">คัดลอกลิงก์</button>`, bg => {
     const n = bg.querySelector('#shNative');
     if (n) n.onclick = async () => { try { await navigator.share({ title: 'WORMADI', text, url }); } catch {} };
-    bg.querySelector('#shCopy').onclick = async () => { try { await navigator.clipboard.writeText(text + '\n' + url); toast('คัดลอกลิงก์แล้ว'); } catch { prompt('คัดลอกลิงก์นี้', url); } };
+    bg.querySelector('#shCopy').onclick = async () => { try { await navigator.clipboard.writeText(text + '\n' + url); toast('คัดลอกลิงก์แล้ว'); } catch { copyLinkDialog(url); } };
   });
 }
 ROUTES.join = async p => {
@@ -1267,8 +1298,8 @@ function roomMembersSheet() {
   sheet(`<h3>สมาชิกในกลุ่ม “${esc(ch)}”</h3><p class="small muted" style="margin-top:0">${users.length} คนอยู่ในกลุ่มตอนนี้${boss ? ' · คุณเป็นผู้สร้างกลุ่ม นำคนออกได้' : ''}</p>
     <div class="list" style="margin:0">${users.map(u => `<div class="li">${avatar({ id: u.id, name: u.name, has_avatar: 1 })}<div class="grow"><div class="t1 ell">${esc(u.name)}${S.user && u.id === S.user.id ? ' (คุณ)' : ''}</div><div class="t2 ell">${esc(u.dept || '')}</div></div>
       ${boss && S.user && u.id !== S.user.id ? `<button class="btn sm" data-kick="${u.id}" data-kname="${esc(u.name)}" type="button" style="color:var(--err-fg)">นำออก</button>` : ''}</div>`).join('') || '<div class="empty">ยังไม่มีใคร</div>'}</div>`, bg => {
-    for (const b of $$('[data-kick]', bg)) b.onclick = () => {
-      if (!confirm(`นำ ${b.dataset.kname} ออกจากกลุ่ม “${ch}”?\nเขาจะกลับเข้ามาได้เมื่อคุณเชิญอีกครั้ง`)) return;
+    for (const b of $$('[data-kick]', bg)) b.onclick = async () => {
+      if (!await ask(`นำ ${b.dataset.kname} ออกจากกลุ่ม “${ch}”?\nเขาจะกลับเข้ามาได้เมื่อคุณเชิญอีกครั้ง`, { title: 'นำออกจากกลุ่ม', yes: 'นำออก', danger: true })) return;
       sendMsg({ type: 'kick', to: Number(b.dataset.kick), channel: ch }); closeSheet();
     };
   });
@@ -1763,7 +1794,7 @@ function pinEditor(p, data, redraw) {
       } catch (e) { toast(e.message); }
     };
     const d = bg.querySelector('#pdel');
-    if (d) d.onclick = async () => { if (!confirm(`ลบจุด "${p.name}"?`)) return; try { await api(`/api/map/pins/${p.id}`, { method: 'DELETE' }); Object.assign(data, await api('/api/map')); closeSheet(); redraw(); } catch (e) { toast(e.message); } };
+    if (d) d.onclick = async () => { if (!await ask(`ลบจุด "${p.name}"?`, { title: 'ลบจุดบนแผนที่', yes: 'ลบ', danger: true })) return; try { await api(`/api/map/pins/${p.id}`, { method: 'DELETE' }); Object.assign(data, await api('/api/map')); closeSheet(); redraw(); } catch (e) { toast(e.message); } };
   });
 }
 function pickImage(maxSide, cb, quality = 0.85, opts = {}) {
@@ -1848,9 +1879,9 @@ ROUTES.incidents = async p => {
     sheet('<div class="empty">กำลังโหลดรูป…</div>');
     try { const d = await api(`/api/incidents/${b.dataset.ph}/photo`); sheet(`<img src="${d.photo}" alt="รูปเหตุการณ์" style="width:100%;border-radius:14px;display:block">`); } catch (e) { closeSheet(); toast(e.message); }
   };
-  for (const b of $$('[data-done]', el)) b.onclick = async () => { if (b.dataset.v === '1' && !confirm('ปิดเหตุการณ์ ยืนยันว่าปกติแล้ว?')) return; try { await api(`/api/incidents/${b.dataset.done}`, { method: 'PATCH', body: { done: b.dataset.v === '1' } }); render(); } catch (e) { toast(e.message); } };
+  for (const b of $$('[data-done]', el)) b.onclick = async () => { if (b.dataset.v === '1' && !await ask('ปิดเหตุการณ์ ยืนยันว่าปกติแล้ว?', { title: 'ปิดเหตุการณ์', yes: 'ปิดเหตุการณ์' })) return; try { await api(`/api/incidents/${b.dataset.done}`, { method: 'PATCH', body: { done: b.dataset.v === '1' } }); render(); } catch (e) { toast(e.message); } };
   for (const b of $$('[data-cm]', el)) b.onclick = () => incidentComments(rows.find(r => r.id === Number(b.dataset.cm)));
-  for (const b of $$('[data-del]', el)) b.onclick = async () => { if (!confirm('ลบรายงานนี้?')) return; try { await api(`/api/incidents/${b.dataset.del}`, { method: 'DELETE' }); render(); } catch (e) { toast(e.message); } };
+  for (const b of $$('[data-del]', el)) b.onclick = async () => { if (!await ask('ลบรายงานนี้?', { title: 'ลบรายงาน', yes: 'ลบ', danger: true })) return; try { await api(`/api/incidents/${b.dataset.del}`, { method: 'DELETE' }); render(); } catch (e) { toast(e.message); } };
 };
 async function incidentComments(r) {
   if (!r) return;
@@ -1895,7 +1926,7 @@ function incidentSheet() {
     $('iSend').onclick = async () => {
       const text = $('iTx').value.trim(), place = $('iPl').value.trim();
       if (!text && !d.photo) return toast('ใส่ข้อความหรือรูปอย่างน้อย 1 อย่าง');
-      if (d.level === 'high' && !confirm('ระดับสูง จะเตือนทุกคนทันที ยืนยันโพสต์?')) return;
+      if (d.level === 'high' && !await ask('ระดับสูง จะเตือนทุกคนทันที ยืนยันโพสต์?', { title: 'เตือนทุกคน', yes: 'โพสต์', danger: true, icon: 'siren' })) return;
       const b = $('iSend'); b.disabled = true; b.textContent = 'กำลังโพสต์…';
       try { await api('/api/incidents', { method: 'POST', body: { text, place, level: d.level, photo: d.photo, thumb: d.thumb, lat: d.lat, lng: d.lng } }); closeSheet(); toast('โพสต์แล้ว ทุกคนเห็นแล้ว'); if (S.route === 'incidents') render(); else go('incidents'); }
       catch (e) { toast(e.message); b.disabled = false; b.textContent = 'โพสต์'; }
@@ -1976,7 +2007,7 @@ function noteSheet(n) {
       } catch (er) { err.textContent = er.message; $('nsave').disabled = false; }
     };
     const d = $('ndel');
-    if (d) d.onclick = async () => { if (!confirm('ลบบันทึกนี้?')) return; try { await api(`/api/reminders/${n.id}`, { method: 'DELETE' }); closeSheet(); refreshMe(); render(); } catch (er) { toast(er.message); } };
+    if (d) d.onclick = async () => { if (!await ask('ลบบันทึกนี้?', { title: 'ลบบันทึก', yes: 'ลบ', danger: true })) return; try { await api(`/api/reminders/${n.id}`, { method: 'DELETE' }); closeSheet(); refreshMe(); render(); } catch (er) { toast(er.message); } };
   });
 }
 // the alarm when a reminder is due
@@ -2050,7 +2081,7 @@ ROUTES.sos = p => {
     };
     for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(ev, () => { if (!busy) reset(); });
     btn.oncontextmenu = e => e.preventDefault();
-    btn.onkeydown = e => { if ((e.key === 'Enter' || e.key === ' ') && confirm('แจ้งเหตุฉุกเฉิน? ทุกเครื่องจะมีเสียงเตือน')) { e.preventDefault(); fire(); } };
+    btn.onkeydown = async e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (await ask('แจ้งเหตุฉุกเฉิน? ทุกเครื่องจะมีเสียงเตือน', { title: 'แจ้งเหตุฉุกเฉิน', yes: 'แจ้งเหตุ', danger: true, icon: 'siren' })) fire(); } };
   });
   renderSosList();
 };
@@ -2065,7 +2096,7 @@ async function renderSosList() {
       <div class="t2">${esc(s.reporter)} · ${fmtTime(s.ts)} ${fmtDate(s.ts)} · รับทราบ ${s.acks} คน</div></div>
       ${s.status === 'open' ? (lead ? `<button class="btn sm" data-close="${s.id}">ปิดเหตุ</button>` : '<span class="pill talk">กำลังดำเนินการ</span>') : '<span class="pill gray">ปิดแล้ว</span>'}</div>`;
   }).join('')}</div>` : '<div class="empty">ยังไม่มีการแจ้งเหตุ</div>';
-  for (const b of $$('[data-close]', el)) b.onclick = async () => { if (!confirm('ปิดเหตุนี้ (สถานการณ์ปลอดภัยแล้ว)?')) return; try { await api(`/api/sos/${b.dataset.close}/close`, { method: 'POST' }); renderSosList(); } catch (e) { toast(e.message); } };
+  for (const b of $$('[data-close]', el)) b.onclick = async () => { if (!await ask('ปิดเหตุนี้ (สถานการณ์ปลอดภัยแล้ว)?', { title: 'ปิดเหตุฉุกเฉิน', yes: 'ปิดเหตุ' })) return; try { await api(`/api/sos/${b.dataset.close}/close`, { method: 'POST' }); renderSosList(); } catch (e) { toast(e.message); } };
 }
 
 // ---------------------------------------------------------------- 12 notifications
@@ -2127,7 +2158,7 @@ function changeAvatar() {
     </div>`, bg => {
     $('avCam').onclick = () => pick(true);
     $('avGal').onclick = () => pick(false);
-    const d = $('avDel'); if (d) d.onclick = () => { if (confirm('ลบรูปโปรไฟล์?')) save(null); };
+    const d = $('avDel'); if (d) d.onclick = async () => { if (await ask('ลบรูปโปรไฟล์?', { title: 'ลบรูปโปรไฟล์', yes: 'ลบ', danger: true })) save(null); };
     loadAvatars(bg);
   });
 }
@@ -2237,7 +2268,7 @@ ROUTES.settings = () => {
     on('sApk', () => { location.href = APK_URL; });
     const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); toast(k.checked ? 'ได้ยินตลอดเวลา: เปิด' : 'ได้ยินตลอดเวลา: ปิด (เหตุฉุกเฉินยังดังตามปกติ)'); };
     on('sNotes', () => go('tasks')); on('sCodes', radioCodes); on('sHelp', help); on('sAbout', about);
-    on('sOut', () => { if (confirm('ออกจากระบบ?')) signOut(); });
+    on('sOut', async () => { if (await ask('ออกจากระบบ?', { title: 'ออกจากระบบ', yes: 'ออกจากระบบ' })) signOut(); });
     const w = $('optWake'); if (w) w.onchange = () => { lsSet('walkie_wake', w.checked ? '1' : '0'); setWake(w.checked); };
     const pb = $('sPush'); if (pb) pb.onclick = async () => { await enablePush(true); render(); };
   });
@@ -2485,7 +2516,7 @@ function installGuide() {
       <p class="small muted">Samsung Internet: เมนู ≡ → เพิ่มหน้าลงใน → หน้าจอหลัก</p>`;
   sheet(`<div style="text-align:center"><img class="appicon-img" src="brand/app-icon.png" alt="" style="width:72px;height:72px;margin:4px auto"></div>
     <h3 style="text-align:center;margin-top:6px">ติดตั้ง WORMADI ลงหน้าจอ</h3>${body}`, () => {
-    const b = $('cpLink'); if (b) b.onclick = async () => { try { await navigator.clipboard.writeText(link); toast('คัดลอกลิงก์แล้ว'); } catch { prompt('คัดลอกลิงก์นี้', link); } };
+    const b = $('cpLink'); if (b) b.onclick = async () => { try { await navigator.clipboard.writeText(link); toast('คัดลอกลิงก์แล้ว'); } catch { copyLinkDialog(link); } };
   });
 }
 function installBar() {
@@ -2538,7 +2569,7 @@ async function probeServer() {
   try {
     const r = await WN.probe({ server: raw });
     if (r.needTrust) {
-      if (confirm(`เซิร์ฟเวอร์ใช้ใบรับรองที่สร้างเอง\nลายนิ้วมือ: ${r.sha256}\nตรงกับที่หน้าจอเซิร์ฟเวอร์แสดงหรือไม่?`)) { await WN.trustCert({ server: r.base, sha256: r.sha256 }); return probeServer(); }
+      if (await ask(`เซิร์ฟเวอร์ใช้ใบรับรองที่สร้างเอง\nลายนิ้วมือ: ${r.sha256}\nตรงกับที่หน้าจอเซิร์ฟเวอร์แสดงหรือไม่?`, { title: 'ยืนยันใบรับรอง', yes: 'ตรงกัน เชื่อถือ', icon: 'shield' })) { await WN.trustCert({ server: r.base, sha256: r.sha256 }); return probeServer(); }
       return info('ยังไม่ได้ยืนยันใบรับรอง');
     }
     serverBase = r.base; lsSet('walkie_server', raw); lsSet('walkie_server_base', r.base);

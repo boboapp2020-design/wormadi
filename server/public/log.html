@@ -160,7 +160,7 @@ function render() {
 }
 async function exportCsv() {
   const r = await fetch(query('&format=csv').replace(`limit=${LIMIT}`, 'limit=5000'), { headers: headers(), cache: 'no-store' });
-  if (!r.ok) return alert('ส่งออกไม่ได้ (HTTP ' + r.status + ')');
+  if (!r.ok) { $('foot').textContent = '⚠ ส่งออกไม่ได้ (HTTP ' + r.status + ')'; return; }
   const url = URL.createObjectURL(await r.blob());
   const a = document.createElement('a');
   a.href = url; a.download = `walkie-log-${new Date().toISOString().slice(0, 10)}.csv`;

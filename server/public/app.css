@@ -537,3 +537,16 @@ select.sel-sm { min-height:40px; padding:6px 34px 6px 12px; border-radius:10px; 
 .cmin .send { background:var(--primary); color:var(--on-primary); border-radius:50%; width:48px; height:48px; flex:none; }
 /* level label: lift it clear of the buttons (Thai tone marks were clipped) */
 label.lbl.lvlbl { margin:4px 2px 8px; line-height:1.6; }
+
+/* themed pop-up dialog (replaces the browser's own confirm / prompt) */
+.dlg-bg { position:absolute; inset:0; z-index:90; background:rgba(4,12,30,.55); display:flex; align-items:center; justify-content:center; padding:20px; animation:dlgFade .15s ease-out; }
+.dlg { width:100%; max-width:360px; background:var(--panel); color:var(--text); border:var(--line-w) solid var(--line-soft); border-radius:22px; padding:22px 20px 18px; text-align:center; box-shadow:0 18px 48px rgba(0,0,0,.35); animation:dlgPop .16s ease-out; }
+.dlg-ic { width:54px; height:54px; margin:0 auto 10px; border-radius:50%; display:grid; place-items:center; background:var(--primary-soft); color:var(--primary-fg); }
+.dlg-ic svg.i { width:28px; height:28px; }
+.dlg-ic.danger { background:color-mix(in srgb, var(--talk) 14%, var(--panel)); color:var(--talk-fg); }
+.dlg h3 { margin:0 0 6px; font-size:20px; }
+.dlg p { margin:3px 0; font-size:16px; line-height:1.5; color:var(--muted); word-break:break-word; }
+.dlg-btns { display:flex; gap:10px; margin-top:18px; } .dlg-btns .btn { flex:1; min-height:50px; }
+.btn.dng { background:var(--talk); color:var(--on-talk); border-color:var(--talk); }
+@keyframes dlgFade { from { opacity:0; } } @keyframes dlgPop { from { transform:scale(.94); opacity:0; } }
+@media (prefers-reduced-motion: reduce) { .dlg-bg, .dlg { animation:none; } }
