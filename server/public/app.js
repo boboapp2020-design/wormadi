@@ -434,12 +434,12 @@ function onMessage(m) {
     case 'invite_done': if (m.accept) loadChannels().then(() => enterRoom(m.channel, 'ptt', { confirmed: true })); else toast('ปฏิเสธคำเชิญแล้ว'); break;
     case 'invite_answer': toast(`${m.name} ${m.accept ? 'เข้ากลุ่ม' : 'ปฏิเสธคำเชิญ'} "${m.channel}"`); break;
     case 'invite_sent': toast(m.online ? `ส่งคำเชิญเข้ากลุ่ม "${m.channel}" แล้ว` : `ส่งคำเชิญแล้ว จะเห็นเมื่อเข้าแอป`); break;
-    case 'call_ringing': toast(`กำลังเรียก ${S.call?.peer?.name || ''}…`); break;
+    case 'call_ringing': toast(`กำลังต่อสาย ${S.call?.peer?.name || ''}…`); break;
     case 'call_fail': toast(m.message || 'เรียกไม่สำเร็จ'); endCall(); break;
     case 'call_reply':
       if (!S.call || S.call.peer.id !== m.from.id) break;
-      if (m.accept) { S.call.status = 'active'; toast(`${m.from.name} รับสายแล้ว พูดได้เลย`); if (S.route === 'ptt') render(); }
-      else { toast(`${m.from.name} ไม่รับสาย`); endCall(); }
+      if (m.accept) { S.call.status = 'active'; toast(`ต่อสายกับ ${m.from.name} แล้ว พูดได้เลย`); if (S.route === 'ptt') render(); }
+      else { toast(`${m.from.name} สายไม่ว่าง`); endCall(); }
       break;
     case 'call_end': if (S.call && m.channel === S.call.channel) { toast(`${m.by} วางสายแล้ว`); endCall(); } break;
     case 'call_handled': stopRing(); if ($('callIn')) closeSheet(); break;
@@ -1173,20 +1173,13 @@ function incomingCall(m) {
     S.call = { peer: m.from, channel: m.channel, prev: S.me && !isDm(S.me.channel) ? S.me.channel : null, status: 'active' };
     stopTalking(true); joinNow(m.channel); go('ptt');
   };
-  sheet(`<div id="callIn" style="text-align:center">
-      <div style="display:flex;justify-content:center;margin:6px 0 10px">${avatar({ id: m.from.id, name: m.from.name, has_avatar: 1 }, 'av')}</div>
-      <h2 style="margin:4px 0">${esc(m.from.name)}</h2>${m.from.dept ? `<div class="muted">${esc(m.from.dept)}</div>` : ''}
-      <p style="font-size:18px;font-weight:600;margin:12px 0 18px">${icon('walkie')} เรียกวอส่วนตัวหาคุณ</p>
-      <div style="display:flex;gap:12px"><button class="btn" id="callNo" type="button" style="background:#cf2020;color:#fff;border-color:#cf2020">ไม่รับ</button>
-      <button class="btn" id="callYes" type="button" style="background:#17803d;color:#fff;border-color:#17803d">${icon('mic')}รับสาย</button></div></div>`, () => {
-    $('callYes').onclick = () => reply(true);
-    $('callNo').onclick = () => reply(false);
-  });
+  // no answer button: the call connects straight away (the caller can talk at once)
   ensureCtx();
-  const ring = () => { if (!NATIVE) { beep(880, 0.15); setTimeout(() => beep(660, 0.15), 220); } vibrate([300, 150, 300]); };
-  ring(); ringTimer = setInterval(ring, 1600);
-  ringStop = setTimeout(() => { if ($('callIn')) { reply(false); toast(`ไม่ได้รับสายจาก ${m.from.name}`); } }, 30000);
-  if (document.hidden) systemNotify(`📞 ${m.from.name} เรียกวอส่วนตัว`, 'แตะเพื่อเปิดแอปแล้วรับสาย', 'call', true);
+  if (!NATIVE) { beep(880, 0.12); setTimeout(() => beep(660, 0.12), 180); }
+  vibrate([200, 100, 200]);
+  toast(`📻 ${m.from.name} วอส่วนตัวหาคุณ`);
+  if (document.hidden) systemNotify(`📻 ${m.from.name} วอส่วนตัวหาคุณ`, 'เปิดแอปแล้วกดค้างปุ่มพูดเพื่อตอบ', 'call', true);
+  reply(true);
 }
 
 /** ask before joining a group */
@@ -2009,7 +2002,7 @@ function help() {
     <dt>PTT</dt><dd>Push To Talk = กดปุ่มค้างเพื่อพูด ปล่อยแล้วจบ (แบบวิทยุสื่อสาร)</dd>
     <dt>ห้อง / กลุ่ม</dt><dd>ช่องคุยของทีมหนึ่ง ๆ คนในห้องเดียวกันได้ยินกัน “ทุกคน” คือห้องรวมที่ทุกคนอยู่</dd>
     <dt>ห้องที่พูด</dt><dd>ห้องที่เสียงคุณจะถูกส่งไป คุณยังฟังห้องอื่นที่เข้าไว้ได้พร้อมกัน</dd>
-    <dt>วอส่วนตัว</dt><dd>คุยกับคนเดียว ต้องให้อีกฝ่ายออนไลน์และกดรับสาย</dd>
+    <dt>วอส่วนตัว</dt><dd>คุยกับคนเดียว (อีกฝ่ายต้องออนไลน์) ต่อสายทันที ไม่ต้องกดรับ</dd>
     <dt>SOS</dt><dd>แจ้งเหตุฉุกเฉิน ทุกเครื่องที่ล็อกอินอยู่จะมีเสียงเตือนพร้อมชื่อคนแจ้ง</dd>
     <dt>ปิดเสียงห้อง</dt><dd>ปุ่มลำโพงข้างชื่อห้อง ยังอยู่ในห้องและเห็นแชท แค่ไม่ได้ยินเสียงพูด</dd>
     <dt>ลดเสียงรบกวน</dt><dd>Noise Cancellation ตัดเสียงเครื่องจักรออกจากเสียงพูดของคุณ</dd>
