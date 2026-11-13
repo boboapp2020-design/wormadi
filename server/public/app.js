@@ -733,6 +733,9 @@ function renderBadges() {
   const msgs = S.msgAlerts.filter(a => !a.read).length + (S.dmUnread ? dmUnreadTotal() : 0), n = S.unread + msgs;
   const set = (id, v) => { const b = $(id); if (b) { b.textContent = v > 9 ? '9+' : v; b.classList.toggle('hidden', !v); } };
   set('navMsgBadge', msgs); set('bellBadge', n); set('taskBadge', S.incNew || 0); for (const t of $$('[data-to="incidents"]')) t.classList.toggle('hot', !!S.incHot); set('msgTileBadge', msgs);
+  set('chatIbBadge', msgs); { const c = $('chatIb'); if (c) c.classList.toggle('hidden', !msgs); }
+  try { if (navigator.setAppBadge) { msgs ? navigator.setAppBadge(msgs) : navigator.clearAppBadge(); } } catch {}
+  document.title = (msgs ? `(${msgs}) ` : '') + document.title.replace(/^(d+) /, '');
 }
 const isMine = m => (m.user_id && S.user && m.user_id === S.user.id) || (m.uid && m.uid === S.uid) || (!m.uid && !m.user_id && S.me && m.name === S.me.name);
 function reactsHtml(id) {
@@ -1009,6 +1012,7 @@ ROUTES.home = () => {
   mount(`<div class="page"><div class="scroll homefit">
     <div class="home-top"><button type="button" id="homeAv" aria-label="เปลี่ยนรูปโปรไฟล์" style="background:none;border:0;padding:0;cursor:pointer">${avatar(S.user || u)}</button>
       <div class="grow"><div class="hi">สวัสดี</div><div class="nm ell">${esc(u.name)}</div><div class="dp ell">${esc(u.dept || '')}</div></div>
+      <button class="ib chatib hidden" id="chatIb" aria-label="ข้อความที่ยังไม่ได้อ่าน">${icon('chat')}<span class="badge" id="chatIbBadge"></span></button>
       <button class="ib" id="bell" aria-label="การแจ้งเตือน">${icon('bell')}<span class="badge hidden" id="bellBadge"></span></button>
     </div>
     ${installBar()}
@@ -1036,6 +1040,7 @@ ROUTES.home = () => {
       if (!ACC() && ['sos', 'tasks', 'map', 'members'].includes(to)) return toast('ใช้ได้เมื่อใช้เซิร์ฟเวอร์ Cloudflare (บัญชีพนักงาน)');
       go(to);
     };
+    $('chatIb').onclick = () => go('convos');
     $('bell').onclick = () => go('notifications');
     $('homeAv').onclick = () => (S.user ? changeAvatar() : go('profile'));
     if ($('pushAsk')) $('pushAsk').onclick = async () => { await enablePush(true); if (Notification.permission === 'denied') toast('การแจ้งเตือนถูกปิดในเบราว์เซอร์: เปิดได้ที่ การตั้งค่าเว็บไซต์ > การแจ้งเตือน'); render(); };
