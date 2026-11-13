@@ -636,6 +636,21 @@ test('กติกาหมากฮอสไทย (ตรรกะ): 8 ตั�
   assert.deepEqual(G.applyMove('checkers', { b, q: 0 }, 1, { path: [[5, 2], [3, 4]] }).end, { winner: 1 });
 });
 
+test('ข้อความที่ยังไม่ได้อ่าน: นับที่เซิร์ฟเวอร์แม้มาตอนปิดแอป · อ่านแล้วหายไป · ของตัวเองไม่นับ', async () => {
+  const me = tk => call('GET', '/api/me', tk);
+  const ib = (await me(T['แชทB'])).body.user.id, ia = (await me(T['แชทA'])).body.user.id;
+  await me(T['แชทB']);                                                                  // จุดเริ่มนับของ B
+  const ch = 'dm:' + Math.min(ia, ib) + ':' + Math.max(ia, ib);
+  const before = (await me(T['แชทB'])).body.chatUnread[ch] || 0;
+  await call('POST', '/api/dm/' + ib, T['แชทA'], { text: 'สวัสดีตอนปิดแอป 1' });
+  await call('POST', '/api/dm/' + ib, T['แชทA'], { text: 'สวัสดีตอนปิดแอป 2' });
+  assert.equal((await me(T['แชทB'])).body.chatUnread[ch], before + 2, 'B เห็นยังไม่อ่านเพิ่ม 2');
+  assert.equal((await me(T['แชทA'])).body.chatUnread[ch] || 0, 0, 'ข้อความของตัวเองไม่นับ');
+  assert.equal((await call('POST', '/api/chat/read', T['แชทB'], { channel: ch })).status, 200);
+  assert.equal((await me(T['แชทB'])).body.chatUnread[ch] || 0, 0, 'อ่านแล้วหายไป');
+  assert.equal((await call('POST', '/api/chat/read', T['แชทC'], { channel: ch })).status, 400, 'คนนอกห้องส่วนตัวไม่ได้');
+});
+
 (async () => {
   let fail = 0;
   for (const [n, f] of tests) {

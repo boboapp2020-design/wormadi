@@ -1,6 +1,6 @@
 // Service worker: ให้ติดตั้งเป็นแอปได้ เปิดหน้าแอปได้แม้เน็ตแกว่ง และกดแจ้งเตือนแล้วกลับเข้าแอป
 // หน้าเว็บ: ลองเน็ตก่อน (ได้เวอร์ชันใหม่เสมอ) ถ้าไม่มีเน็ตใช้ของที่เก็บไว้ · /api และ WebSocket ไม่ผ่าน cache
-const CACHE = 'wormadi-v41';
+const CACHE = 'wormadi-v42';
 // (index.html / log.html are cached when visited: Cloudflare redirects *.html to clean URLs)
 const SHELL = ['./', 'theme.css', 'app.css', 'app.js', 'manifest.webmanifest', 'vendor/qrcode.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-180.png', 'brand/logo.png', 'brand/app-icon.png', 'brand/wordmark.png'];
@@ -38,6 +38,16 @@ const kv = key => new Promise(res => {
   o.onsuccess = () => { const r = o.result.transaction('kv').objectStore('kv').get(key); r.onsuccess = () => res(r.result || null); r.onerror = () => res(null); };
   o.onerror = () => res(null);
 });
+const kvPut = (key, val) => new Promise(res => {
+  const o = indexedDB.open('wormadi', 1);
+  o.onupgradeneeded = () => o.result.createObjectStore('kv');
+  o.onsuccess = () => { const t = o.result.transaction('kv', 'readwrite'); t.objectStore('kv').put(val, key); t.oncomplete = () => res(); t.onerror = () => res(); };
+  o.onerror = () => res();
+});
+/** app icon badge while the app is closed: one more unread chat per new private-chat push */
+async function bumpBadge() {
+  try { const n = ((await kv('unread')) || 0) + 1; await kvPut('unread', n); if (self.navigator.setAppBadge) await self.navigator.setAppBadge(n); } catch {}
+}
 self.addEventListener('push', e => {
   e.waitUntil((async () => {
     const auth = await kv('auth');
@@ -48,6 +58,7 @@ self.addEventListener('push', e => {
       if (r.ok) d = await r.json();
     } catch {}
     if (d && (d.kind === 'dm' || d.kind === 'voice')) {
+      await bumpBadge();
       return self.registration.showNotification(d.title, {
         body: d.kind === 'voice' ? d.body + ' · แตะเพื่อฟัง' : d.body, tag: 'wormadi-' + (d.tag || 'dm'), renotify: true,
         vibrate: [200, 100, 200], icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', data: { url: d.url },

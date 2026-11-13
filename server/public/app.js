@@ -182,6 +182,12 @@ async function refreshMe() {
   try {
     const d = await api('/api/me');
     S.user = d.user; S.unread = d.unread; S.openTasks = d.openTasks;
+    if (d.chatUnread) {                                           // the server counts unread chats (also those that arrived while the app was closed)
+      S.dmUnread = {}; S.grpUnread = {};
+      for (const [ch, n] of Object.entries(d.chatUnread)) (isDm(ch) ? S.dmUnread : S.grpUnread)[ch] = n;
+      for (const a of S.msgAlerts) a.read = true;                 // those are counted by the server now
+      lsSet('walkie_alerts', JSON.stringify(S.msgAlerts)); lsSet('walkie_dm_unread', JSON.stringify(S.dmUnread));
+    }
     lsSet('walkie_user', JSON.stringify(S.user));
     renderBadges();
     refreshIncidentBadge();
@@ -726,6 +732,7 @@ function addChatMsg(msg) {
       if (S.route === 'chat') { const list = $('msgs'); if (list) { list.insertAdjacentHTML('beforeend', msgHtml(msg)); loadAvatars(list); list.scrollTop = list.scrollHeight; } }
     }
     if (msg.kind === 'text' && !isMine(msg) && (S.route !== 'chat' || document.hidden)) addMsgAlert(msg);
+    else if (msg.kind === 'text' && !isMine(msg)) chatRead(msg.channel);
   } else addMsgAlert(msg);
 }
 function addMsgAlert(msg) {
@@ -736,13 +743,22 @@ function addMsgAlert(msg) {
   renderBadges();
   if (document.hidden) systemNotify(`${msg.name} · ${msg.channel}`, msg.kind === 'talk' ? `พูด ${fmtDur(msg.ms)}` : msg.text, 'ch:' + msg.channel);
 }
+const readSent = {};
+/** tell the server I have read this chat (so it stops counting it as unread, on every device) */
+function chatRead(ch) {
+  if (!ACC() || !S.token || !ch || Date.now() - (readSent[ch] || 0) < 1500) return;
+  readSent[ch] = Date.now(); api('/api/chat/read', { method: 'POST', body: { channel: ch } }).catch(() => {});
+}
 function markChannelRead(ch) {
   let c = false;
+  if (S.grpUnread && S.grpUnread[ch]) { delete S.grpUnread[ch]; c = true; }
+  if (S.route === 'chat' || S.route === 'ptt' || isDm(ch)) chatRead(ch);
   for (const a of S.msgAlerts) if (a.channel === ch && !a.read) { a.read = true; c = true; }
   if (c) { lsSet('walkie_alerts', JSON.stringify(S.msgAlerts)); renderBadges(); }
 }
 function renderBadges() {
-  const msgs = S.msgAlerts.filter(a => !a.read).length + (S.dmUnread ? dmUnreadTotal() : 0), n = S.unread + msgs;
+  const msgs = S.msgAlerts.filter(a => !a.read).length + (S.dmUnread ? dmUnreadTotal() : 0) + Object.values(S.grpUnread || {}).reduce((a, b) => a + b, 0), n = S.unread + msgs;
+  idb(st => st.put(msgs, 'unread')).catch(() => {});          // the service worker keeps the icon badge right while the app is closed
   const set = (id, v) => { const b = $(id); if (b) { b.textContent = v > 9 ? '9+' : v; b.classList.toggle('hidden', !v); } };
   set('navMsgBadge', msgs); set('bellBadge', n); set('taskBadge', S.incNew || 0); for (const t of $$('[data-to="incidents"]')) t.classList.toggle('hot', !!S.incHot); set('msgTileBadge', msgs);
   set('chatIbBadge', msgs); { const c = $('chatIb'); if (c) c.classList.toggle('hidden', !msgs); }
@@ -1395,7 +1411,7 @@ ROUTES.convos = async () => {
   if (ACC()) { try { dms = await api('/api/dm'); for (const d of dms) S.dmPeers[d.peer.id] = d.peer; } catch {} }
   const draw = () => {
     const q = ($('q')?.value || '').trim().toLowerCase();
-    const unread = ch => S.msgAlerts.filter(a => a.channel === ch && !a.read).length;
+    const unread = ch => S.msgAlerts.filter(a => a.channel === ch && !a.read).length + ((S.grpUnread || {})[ch] || 0);
     const list = [...S.channels].filter(c => !q || c.name.toLowerCase().includes(q)).sort((a, b) => (last[b.name]?.ts || 0) - (last[a.name]?.ts || 0));
     if (!$('cv')) return;
     const dmList = dms.filter(d => !q || (d.peer.name || '').toLowerCase().includes(q));
@@ -1445,7 +1461,7 @@ ROUTES.dm = async p => {
     };
     $('dmCall').onclick = () => { if (!peer.online) return voiceMsgSheet(peer); startCall(peer); };
   });
-  S.dmOpen = ch; delete S.dmUnread[ch]; saveDmUnread();
+  S.dmOpen = ch; delete S.dmUnread[ch]; saveDmUnread(); chatRead(ch);
   if (!peer.name || peer.online == null) { try { const u = (await api('/api/users')).find(x => x.id === pid); if (u) peer = S.dmPeers[pid] = u; } catch {} }
   if (S.route !== 'dm' || S.dmOpen !== ch) return;
   if ($('dmName')) $('dmName').textContent = peer.name || 'แชทส่วนตัว';
@@ -1468,7 +1484,7 @@ function incomingDm(m) {
   if (m.mine || (S.user && msg.user_id === S.user.id)) { addDmMsg(msg); return; }     // my own message (other screen)
   S.dmPeers[m.from.id] = { ...(S.dmPeers[m.from.id] || {}), ...m.from, online: true };
   if (msg.voice) { S.dmPeers[m.from.id].online = true; setTimeout(() => checkVoicemail(true), 300); }
-  if (addDmMsg(msg) && !document.hidden) return;                          // reading that chat right now
+  if (addDmMsg(msg) && !document.hidden) { chatRead(msg.channel); return; }                          // reading that chat right now
   S.dmUnread[msg.channel] = (S.dmUnread[msg.channel] || 0) + 1; saveDmUnread();
   if (!NATIVE) beep(740, 0.08); vibrate(60);
   const txt = msg.kind === 'talk' ? `🎙 ข้อความเสียง ${fmtDur(msg.ms)}` : msg.text;

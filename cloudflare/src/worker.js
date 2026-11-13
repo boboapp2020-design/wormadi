@@ -70,6 +70,7 @@ export default {
     await cleanChat(env);
     const day = 86_400_000, now = Date.now();
     await env.DB.prepare('DELETE FROM reminders WHERE done_at IS NOT NULL AND done_at < ?').bind(now - 30 * day).run();
+    await env.DB.prepare('DELETE FROM chat_reads WHERE channel != \'*\' AND ts < ?').bind(now - 3 * day).run();
     await env.DB.prepare('DELETE FROM games WHERE updated < ?').bind(now - 3 * day).run();   // duel games keep 3 days
     await env.DB.batch([   // incident board keeps 7 days
       env.DB.prepare('DELETE FROM incident_comments WHERE incident_id IN (SELECT id FROM incidents WHERE ts < ?)').bind(now - 7 * day),
@@ -128,6 +129,22 @@ async function deniedRooms(db, me) {
   return new Set(results.map(r => r.name));
 }
 /** private call channel "dm:a:b": only users a and b */
+/** unread chat per channel: private chats (any kind) and room text messages from others, newer than my last read (24 h retention) */
+async function chatUnread(db, me) {
+  const now = Date.now();
+  await db.prepare("INSERT OR IGNORE INTO chat_reads (user_id, channel, ts) VALUES (?, '*', ?)").bind(me.id, now).run();   // first call = the starting point
+  const { results } = await db.prepare(
+    `SELECT m.channel, COUNT(*) AS n FROM messages m
+       LEFT JOIN chat_reads r ON r.user_id = ?1 AND r.channel = m.channel
+       LEFT JOIN chat_reads b ON b.user_id = ?1 AND b.channel = '*'
+     WHERE m.ts > ?2 AND m.ts > COALESCE(r.ts, b.ts, 0) AND COALESCE(m.user_id, 0) != ?1
+       AND ((m.channel LIKE 'dm:%' AND (m.channel LIKE ?3 OR m.channel LIKE ?4)) OR (m.channel NOT LIKE 'dm:%' AND m.kind = 'text'))
+     GROUP BY m.channel`).bind(me.id, now - 86_400_000, `dm:${me.id}:%`, `dm:%:${me.id}`).all();
+  const denied = await deniedRooms(db, me);
+  const out = {};
+  for (const r of results) if (!denied.has(r.channel)) out[r.channel] = r.n;
+  return out;
+}
 const dmBlocked = (ch, me) => { const m = /^dm:(\d+):(\d+)$/.exec(String(ch || '')); return !!m && ![Number(m[1]), Number(m[2])].includes(me.id); };
 // ---- reminders (บันทึก / เตือน)
 const RPT_MS = { daily: 86_400_000, shift: 8 * 3_600_000, weekly: 7 * 86_400_000 };
@@ -255,11 +272,17 @@ async function api(req, env, url) {
     const unread = await db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE (user_id IS NULL OR user_id = ?) AND ts > ?').bind(me.id, lr).first('n');
     const tasks = await db.prepare('SELECT COUNT(*) AS n FROM reminders WHERE user_id = ? AND done_at IS NULL AND next_at IS NOT NULL AND next_at < ?').bind(me.id, Date.now() + 86_400_000).first('n');
     const ch = me.main_channel ? await db.prepare('SELECT name FROM channels WHERE id = ?').bind(me.main_channel).first('name') : null;
-    return json({ user: { ...me, main_channel_name: ch }, unread, openTasks: tasks });
+    return json({ user: { ...me, main_channel_name: ch }, unread, openTasks: tasks, chatUnread: await chatUnread(db, me) });
   }
   if (p === '/api/me' && m === 'PATCH') {
     const b = await readJson(req);
     if ('avatar' in b) await db.prepare('UPDATE users SET avatar = ? WHERE id = ?').bind(b.avatar ? dataUrl(b.avatar, 200_000) : null, me.id).run();
+    return json({ ok: true });
+  }
+  if (p === '/api/chat/read' && m === 'POST') {          // I have read this chat up to now
+    const ch = str((await readJson(req)).channel, 80);
+    if (!ch || dmBlocked(ch, me)) return fail(400, 'ไม่ถูกต้อง');
+    await db.prepare('INSERT INTO chat_reads (user_id, channel, ts) VALUES (?, ?, ?) ON CONFLICT(user_id, channel) DO UPDATE SET ts = excluded.ts').bind(me.id, ch, Date.now()).run();
     return json({ ok: true });
   }
   if (p === '/api/me/password' && m === 'POST') {
