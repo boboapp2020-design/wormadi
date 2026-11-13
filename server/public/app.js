@@ -184,6 +184,7 @@ async function refreshMe() {
     S.user = d.user; S.unread = d.unread; S.openTasks = d.openTasks;
     lsSet('walkie_user', JSON.stringify(S.user));
     renderBadges();
+    refreshIncidentBadge();
   } catch {}
 }
 const isDm = name => /^dm:\d+:\d+$/.test(String(name || ''));
@@ -430,6 +431,14 @@ function onMessage(m) {
     case 'chat': addChatMsg(m.msg); break;
     case 'notify': addMsgAlert(m.msg); break;
     case 'react': S.chat.reactions[m.id] = m.by; const el = $('r-' + m.id); if (el) el.innerHTML = reactsHtml(m.id); break;
+    case 'incident':
+      if (S.user && m.name === S.user.name) break;
+      S.incNew = (S.incNew || 0) + 1; renderBadges();
+      vibrate([120, 60, 120]); if (!NATIVE) beep(740, 0.08);
+      toast(`📋 ${m.name} รายงานเหตุการณ์${m.place ? ' · ' + m.place : ''}`);
+      if (document.hidden) systemNotify(`📋 ${m.name} รายงานเหตุการณ์`, m.text || m.place || 'แตะเพื่อดู', 'incident');
+      if (S.route === 'incidents') render();
+      break;
     case 'notification':
       S.unread++; renderBadges();
       if (m.reminder) { showReminder(m.reminder, m.notification); break; }
@@ -676,7 +685,7 @@ function markChannelRead(ch) {
 function renderBadges() {
   const msgs = S.msgAlerts.filter(a => !a.read).length + (S.dmUnread ? dmUnreadTotal() : 0), n = S.unread + msgs;
   const set = (id, v) => { const b = $(id); if (b) { b.textContent = v > 9 ? '9+' : v; b.classList.toggle('hidden', !v); } };
-  set('navMsgBadge', msgs); set('bellBadge', n); set('taskBadge', S.openTasks); set('msgTileBadge', msgs);
+  set('navMsgBadge', msgs); set('bellBadge', n); set('taskBadge', S.incNew || 0); set('msgTileBadge', msgs);
 }
 const isMine = m => (m.user_id && S.user && m.user_id === S.user.id) || (m.uid && m.uid === S.uid) || (!m.uid && !m.user_id && S.me && m.name === S.me.name);
 function reactsHtml(id) {
@@ -853,6 +862,7 @@ ROUTES.login = () => {
 };
 async function afterSignIn() {
   await Promise.all([loadChannels(), refreshMe()]);
+  refreshIncidentBadge();
   ensureCtx();
   startConnection();
   enablePush(true);
@@ -964,7 +974,7 @@ ROUTES.home = () => {
       <button class="tile grp" data-to="channels">${icon('team')}กลุ่มสื่อสาร</button>
       <button class="tile tmsg" data-to="convos">${icon('chat')}ข้อความ<span class="badge hidden" id="msgTileBadge"></span></button>
       <button class="tile sos" data-to="sos">${icon('siren')}แจ้งเหตุฉุกเฉิน<small>(SOS)</small></button>
-      <button class="tile ttask" data-to="tasks">${icon('task')}บันทึก / เตือน<span class="badge hidden" id="taskBadge"></span></button>
+      <button class="tile ttask" data-to="incidents">${icon('warn')}รายงานเหตุการณ์<span class="badge hidden" id="taskBadge"></span></button>
       <button class="tile map" data-to="map">${icon('map')}แผนที่โรงงาน</button>
     </div>
     <button class="card online-card" style="width:calc(100% - 28px);text-align:left" data-to="members">
@@ -1747,7 +1757,7 @@ function pinEditor(p, data, redraw) {
 }
 function pickImage(maxSide, cb, quality = 0.85, opts = {}) {
   const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
-  if (opts.camera) inp.setAttribute('capture', 'user');
+  if (opts.camera) inp.setAttribute('capture', opts.camera === 'back' ? 'environment' : 'user');
   inp.onchange = () => {
     const f = inp.files[0]; if (!f) return;
     const img = new Image();
@@ -1768,6 +1778,76 @@ function pickImage(maxSide, cb, quality = 0.85, opts = {}) {
     img.src = URL.createObjectURL(f);
   };
   inp.click();
+}
+
+// ---------------------------------------------------------------- รายงานเหตุการณ์ (board: everyone posts what they found, with a photo)
+function agoText(ts) {
+  const m = Math.round((Date.now() - ts) / 60000);
+  return m < 1 ? 'เมื่อสักครู่' : m < 60 ? m + ' นาทีที่แล้ว' : m < 1440 ? Math.round(m / 60) + ' ชม.ที่แล้ว' : fmtDate(ts) + ' ' + fmtTime(ts);
+}
+async function refreshIncidentBadge() {
+  if (!ACC()) return;
+  try { const rows = await api('/api/incidents'); const seen = Number(lsGet('walkie_inc_seen') || 0); S.incNew = rows.filter(r => r.ts > seen && r.user_id !== S.user?.id && !r.done_at).length; renderBadges(); } catch {}
+}
+ROUTES.incidents = async p => {
+  const tab = p.tab || 'open';
+  mount(`<div class="page">${header('รายงานเหตุการณ์', '', `<button class="ib" id="incNew" aria-label="รายงานใหม่">${icon('plus')}</button>`)}
+    <div class="tabs"><button data-t="open" class="${tab === 'open' ? 'on' : ''}">ยังไม่แก้ไข</button><button data-t="all" class="${tab === 'all' ? 'on' : ''}">ทั้งหมด</button><button data-t="mine" class="${tab === 'mine' ? 'on' : ''}">ของฉัน</button></div>
+    <div class="scroll"><div style="padding:6px 14px 0"><button class="btn primary" id="incNew2" type="button">${icon('camera')}รายงานสิ่งผิดปกติ</button></div>
+    <div id="incList" class="incs"><div class="empty">กำลังโหลด…</div></div>
+    <p class="small muted" style="padding:0 18px 18px;text-align:center">ทุกคนเห็น · เก็บไว้ 30 วัน</p></div></div>`, root => {
+    bindBack(root);
+    for (const x of $$('[data-t]', root)) x.onclick = () => go('incidents', { tab: x.dataset.t }, true);
+    $('incNew').onclick = $('incNew2').onclick = () => incidentSheet();
+  });
+  let rows = [];
+  try { rows = await api('/api/incidents'); } catch (e) { if ($('incList')) $('incList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!$('incList') || S.route !== 'incidents') return;
+  lsSet('walkie_inc_seen', String(Date.now())); S.incNew = 0; renderBadges();
+  const me = S.user || {}, boss = me.role === 'admin' || me.role === 'lead';
+  const list = rows.filter(r => tab === 'all' ? true : tab === 'mine' ? r.user_id === me.id : !r.done_at);
+  const el = $('incList');
+  el.innerHTML = list.length ? list.map(r => `<article class="inc ${r.done_at ? 'done' : ''}" data-i="${r.id}">
+      <div class="inchd">${avatar({ id: r.user_id, name: r.name, has_avatar: r.has_avatar }, 'av')}<div class="grow"><b>${esc(r.name || '—')}</b><small>${esc(r.dept || '')}${r.dept ? ' · ' : ''}${agoText(r.ts)}</small></div>
+        ${r.done_at ? `<span class="pill ok">${icon('check')}แก้ไขแล้ว</span>` : '<span class="pill warn">รอแก้ไข</span>'}</div>
+      ${r.text ? `<p class="inctx">${esc(r.text)}</p>` : ''}
+      ${r.place || (r.lat != null) ? `<div class="incpl">${icon('pin')}${esc(r.place || '')}${r.lat != null ? ` <a href="https://maps.google.com/?q=${r.lat},${r.lng}" target="_blank" rel="noopener">ดูแผนที่</a>` : ''}</div>` : ''}
+      ${r.thumb ? `<button class="incph" type="button" data-ph="${r.id}" aria-label="ดูรูปเต็ม"><img src="${r.thumb}" alt="รูปเหตุการณ์"></button>` : ''}
+      ${r.done_at && r.done_name ? `<small class="muted">แก้ไขแล้วโดย ${esc(r.done_name)} · ${agoText(r.done_at)}</small>` : ''}
+      <div class="incact">
+        ${r.user_id === me.id || boss ? `<button class="btn sm" type="button" data-done="${r.id}" data-v="${r.done_at ? 0 : 1}">${r.done_at ? 'ยังไม่แก้ไข' : icon('check') + 'แก้ไขแล้ว'}</button>` : ''}
+        ${r.user_id === me.id || me.role === 'admin' ? `<button class="btn sm ghost" type="button" data-del="${r.id}">${icon('trash')}ลบ</button>` : ''}
+      </div></article>`).join('')
+    : `<div class="empty">${tab === 'open' ? 'ไม่มีเหตุการณ์ที่รอแก้ไข' : 'ยังไม่มีรายงาน'}</div>`;
+  for (const b of $$('[data-ph]', el)) b.onclick = async () => {
+    sheet('<div class="empty">กำลังโหลดรูป…</div>');
+    try { const d = await api(`/api/incidents/${b.dataset.ph}/photo`); sheet(`<img src="${d.photo}" alt="รูปเหตุการณ์" style="width:100%;border-radius:14px;display:block">`); } catch (e) { closeSheet(); toast(e.message); }
+  };
+  for (const b of $$('[data-done]', el)) b.onclick = async () => { try { await api(`/api/incidents/${b.dataset.done}`, { method: 'PATCH', body: { done: b.dataset.v === '1' } }); render(); } catch (e) { toast(e.message); } };
+  for (const b of $$('[data-del]', el)) b.onclick = async () => { if (!confirm('ลบรายงานนี้?')) return; try { await api(`/api/incidents/${b.dataset.del}`, { method: 'DELETE' }); render(); } catch (e) { toast(e.message); } };
+};
+function incidentSheet() {
+  const d = { photo: null, thumb: null, lat: null, lng: null };
+  sheet(`<h3>รายงานสิ่งผิดปกติ</h3>
+    <div class="incpick"><button class="btn" type="button" id="iCam">${icon('camera')}ถ่ายรูป</button><button class="btn" type="button" id="iGal">เลือกรูป</button></div>
+    <div id="iPrev" class="incprev hidden"></div>
+    <label class="lbl" for="iTx">เกิดอะไรขึ้น</label><div class="field plain"><textarea id="iTx" rows="3" maxlength="1000" placeholder="เช่น ท่อไอน้ำรั่ว มีควันออก"></textarea></div>
+    <label class="lbl" for="iPl">ที่ไหน (ไม่ใส่ก็ได้)</label><div class="field plain"><input id="iPl" maxlength="120" placeholder="เช่น หม้อไอน้ำ 2 ชั้นล่าง"></div>
+    <p class="small muted" id="iGps" style="margin:6px 2px 12px"></p>
+    <button class="btn primary" type="button" id="iSend">${icon('send')}โพสต์</button>`, () => {
+    const prev = () => { const p = $('iPrev'); if (!p) return; p.classList.toggle('hidden', !d.thumb); p.innerHTML = d.thumb ? `<img src="${d.thumb}" alt=""><button class="ib" type="button" id="iRm" aria-label="เอารูปออก">${icon('x')}</button>` : ''; const x = $('iRm'); if (x) x.onclick = () => { d.photo = d.thumb = null; prev(); }; };
+    const got = full => { d.photo = full; const im = new Image(); im.onload = () => { const c = document.createElement('canvas'), k = Math.min(1, 360 / Math.max(im.width, im.height)); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); d.thumb = c.toDataURL('image/jpeg', 0.6); prev(); }; im.src = full; };
+    $('iCam').onclick = () => pickImage(1280, got, 0.72, { camera: 'back' });
+    $('iGal').onclick = () => pickImage(1280, got, 0.72);
+    if (navigator.geolocation) { $('iGps').textContent = 'กำลังหาตำแหน่ง…'; navigator.geolocation.getCurrentPosition(r => { d.lat = r.coords.latitude; d.lng = r.coords.longitude; if ($('iGps')) $('iGps').textContent = '📍 แนบตำแหน่ง GPS แล้ว'; }, () => { if ($('iGps')) $('iGps').textContent = ''; }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }); }
+    $('iSend').onclick = async () => {
+      const text = $('iTx').value.trim(), place = $('iPl').value.trim();
+      if (!text && !d.photo) return toast('ใส่ข้อความหรือรูปอย่างน้อย 1 อย่าง');
+      const b = $('iSend'); b.disabled = true; b.textContent = 'กำลังโพสต์…';
+      try { await api('/api/incidents', { method: 'POST', body: { text, place, photo: d.photo, thumb: d.thumb, lat: d.lat, lng: d.lng } }); closeSheet(); toast('โพสต์แล้ว ทุกคนเห็นแล้ว'); if (S.route === 'incidents') render(); else go('incidents'); }
+      catch (e) { toast(e.message); b.disabled = false; b.textContent = 'โพสต์'; }
+    };
+  });
 }
 
 // ---------------------------------------------------------------- 10 บันทึก / เตือน (personal notes + timed reminders)
@@ -2086,6 +2166,7 @@ ROUTES.settings = () => {
     </div>
     <div class="list">
       ${!NATIVE && /Android/i.test(navigator.userAgent) ? row('sApk', 'download', 'ดาวน์โหลดแอป Android', 'ได้ยินเสียงวอแม้ปัดปิดแอป') : ''}
+      ${row('sNotes', 'task', 'บันทึก / เตือน', 'จดบันทึกส่วนตัว ตั้งเวลาให้เครื่องเตือน')}
       ${row('sCodes', 'radio', 'รหัสวิทยุ (ว.)', 'คำที่ใช้วอหากัน เช่น ว.2 = ได้ยินไหม')}
       ${row('sHelp', 'help', 'วิธีใช้')}
       ${row('sAbout', 'info', 'เกี่ยวกับแอป')}
@@ -2102,7 +2183,7 @@ ROUTES.settings = () => {
     on('sReport', () => go('report')); on('sLog', () => { location.href = (serverBase || '') + '/log.html'; }); on('sAdmin', () => go('admin'));
     on('sApk', () => { location.href = APK_URL; });
     const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); toast(k.checked ? 'ได้ยินตลอดเวลา: เปิด' : 'ได้ยินตลอดเวลา: ปิด (เหตุฉุกเฉินยังดังตามปกติ)'); };
-    on('sCodes', radioCodes); on('sHelp', help); on('sAbout', about);
+    on('sNotes', () => go('tasks')); on('sCodes', radioCodes); on('sHelp', help); on('sAbout', about);
     on('sOut', () => { if (confirm('ออกจากระบบ?')) signOut(); });
     const w = $('optWake'); if (w) w.onchange = () => { lsSet('walkie_wake', w.checked ? '1' : '0'); setWake(w.checked); };
     const pb = $('sPush'); if (pb) pb.onclick = async () => { await enablePush(true); render(); };
@@ -2140,7 +2221,7 @@ function help() {
     ${step('chat', 'แชท', 'แตะ “พิมพ์ / ฟังย้อนหลัง” · ▶ = ฟังเสียงย้อนหลัง')}
     ${step('user', 'คุยส่วนตัว', 'สมาชิกทีมงาน → แตะชื่อ → วอ หรือ แชท')}
     ${step('siren', 'ฉุกเฉิน', 'SOS → กดค้าง 1 วินาที ทุกเครื่องดัง')}
-    ${step('bell', 'เตือน', 'บันทึก / เตือน → ตั้งเวลา')}
+    ${step('warn', 'พบสิ่งผิดปกติ', 'รายงานเหตุการณ์ → ถ่ายรูป / พิมพ์ → โพสต์')}
   </ol>
   <h4 style="margin:14px 4px 6px">ความหมายของคำที่ใช้</h4>
   <dl class="gloss">

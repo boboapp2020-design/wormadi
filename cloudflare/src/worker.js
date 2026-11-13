@@ -69,6 +69,7 @@ export default {
     await cleanChat(env);
     const day = 86_400_000, now = Date.now();
     await env.DB.prepare('DELETE FROM reminders WHERE done_at IS NOT NULL AND done_at < ?').bind(now - 30 * day).run();
+    await env.DB.prepare('DELETE FROM incidents WHERE ts < ?').bind(now - 30 * day).run();   // incident board keeps 30 days
     const cutoff = now - (Number(env.LOG_RETENTION_DAYS) || 90) * day;
     await env.DB.batch([
       env.DB.prepare('DELETE FROM walkie_log WHERE ts < ?').bind(cutoff),
@@ -378,6 +379,48 @@ async function api(req, env, url) {
   }
   if (seg[1] === 'reminders' && id && m === 'DELETE') {
     await db.prepare('DELETE FROM reminders WHERE id = ? AND user_id = ?').bind(id, me.id).run();
+    return json({ ok: true });
+  }
+
+  // ---------------------------------------------------------------- รายงานเหตุการณ์ (incident board: everyone posts text / photo)
+  if (p === '/api/incidents' && m === 'GET') {
+    const { results } = await db.prepare(
+      `SELECT i.id, i.ts, i.user_id, i.text, i.place, i.lat, i.lng, i.thumb, i.photo IS NOT NULL AS has_photo, i.done_at,
+              u.name, u.dept, u.avatar IS NOT NULL AS has_avatar, d.name AS done_name
+       FROM incidents i LEFT JOIN users u ON u.id = i.user_id LEFT JOIN users d ON d.id = i.done_by
+       ORDER BY i.id DESC LIMIT 100`).all();
+    return json(results);
+  }
+  if (seg[1] === 'incidents' && id && seg[3] === 'photo' && m === 'GET') {
+    const r = await db.prepare('SELECT photo FROM incidents WHERE id = ?').bind(id).first();
+    if (!r || !r.photo) return fail(404, 'ไม่พบรูป');
+    return json({ photo: r.photo });
+  }
+  if (p === '/api/incidents' && m === 'POST') {
+    const b = await readJson(req);
+    const img = (v, max) => typeof v === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(v) && v.length <= max ? v : null;
+    const text = str(b.text, 1000), place = str(b.place, 120);
+    const photo = img(b.photo, 1_400_000), thumb = photo ? img(b.thumb, 120_000) : null;
+    if (!text && !photo) return fail(400, 'ใส่ข้อความหรือรูปอย่างน้อย 1 อย่าง');
+    const lat = Number(b.lat), lng = Number(b.lng), gps = Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+    const now = Date.now();
+    const r = await db.prepare('INSERT INTO incidents (ts, user_id, text, place, lat, lng, thumb, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(now, me.id, text, place, gps ? lat : null, gps ? lng : null, thumb, photo).run();
+    try { await roomCall(env, '/broadcast', { msg: { type: 'incident', id: r.meta.last_row_id, name: me.name, text: text.slice(0, 80), place } }); } catch {}
+    return json({ ok: true, id: r.meta.last_row_id });
+  }
+  if (seg[1] === 'incidents' && id && (m === 'PATCH' || m === 'DELETE')) {
+    const cur = await db.prepare('SELECT user_id FROM incidents WHERE id = ?').bind(id).first();
+    if (!cur) return fail(404, 'ไม่พบรายงานนี้');
+    const boss = me.role === 'admin' || me.role === 'lead';
+    if (m === 'DELETE') {
+      if (cur.user_id !== me.id && me.role !== 'admin') return fail(403, 'ลบได้เฉพาะคนที่โพสต์');
+      await db.prepare('DELETE FROM incidents WHERE id = ?').bind(id).run();
+      return json({ ok: true });
+    }
+    if (cur.user_id !== me.id && !boss) return fail(403, 'เปลี่ยนสถานะได้เฉพาะคนที่โพสต์หรือหัวหน้า');
+    const b = await readJson(req);
+    await db.prepare('UPDATE incidents SET done_at = ?, done_by = ? WHERE id = ?').bind(b.done ? Date.now() : null, b.done ? me.id : null, id).run();
     return json({ ok: true });
   }
 

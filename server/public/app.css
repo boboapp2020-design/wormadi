@@ -487,3 +487,23 @@ select.sel-sm { min-height:40px; padding:6px 34px 6px 12px; border-radius:10px; 
 .vmitem { display:flex; align-items:center; gap:10px; padding:8px; border-radius:14px; border:1px solid var(--line-soft); }
 .vmitem .av { width:40px; height:40px; flex:none; }
 .vmitem.playing { border-color:var(--primary); box-shadow:0 0 0 2px color-mix(in srgb, var(--primary) 30%, transparent); }
+
+/* incident board */
+.incs { display:flex; flex-direction:column; gap:12px; padding:12px 14px; }
+.inc { background:var(--panel); border:var(--line-w) solid var(--line-soft); border-radius:16px; padding:12px 14px; display:flex; flex-direction:column; gap:8px; box-shadow:var(--shadow); }
+.inc.done { opacity:.75; }
+.inchd { display:flex; align-items:center; gap:10px; }
+.inchd .av { width:40px; height:40px; }
+.inchd b { display:block; font-size:16px; } .inchd small { color:var(--muted); font-size:13px; }
+.inctx { margin:0; font-size:16px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+.incpl { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:14px; } .incpl svg.i { width:16px; height:16px; } .incpl a { color:var(--primary-fg); }
+.incph { padding:0; border:0; background:none; border-radius:12px; overflow:hidden; cursor:zoom-in; }
+.incph img { display:block; width:100%; max-height:300px; object-fit:cover; }
+.incact { display:flex; gap:8px; justify-content:flex-end; } .incact:empty { display:none; }
+.btn.sm { width:auto; min-height:38px; padding:6px 14px; font-size:14px; }
+.btn.ghost { background:none; color:var(--err-fg); border-color:var(--line-soft); }
+.pill.ok { background:var(--t-grp-bg); color:var(--ok-fg); display:inline-flex; gap:4px; align-items:center; } .pill.ok svg.i { width:14px; height:14px; }
+.pill.warn { background:var(--t-map-bg); color:var(--warn-fg); }
+.incpick { display:flex; gap:10px; margin-bottom:10px; } .incpick .btn { flex:1; }
+.incprev { position:relative; margin-bottom:10px; } .incprev img { width:100%; max-height:220px; object-fit:cover; border-radius:12px; display:block; }
+.incprev .ib { position:absolute; top:6px; right:6px; background:rgba(0,0,0,.55); color:#fff; border-radius:50%; }

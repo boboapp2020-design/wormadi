@@ -589,3 +589,23 @@ test('แจ้งเตือนเด้งตอนปิดแอป: เค
   console.log(fail ? `\n✗ API ไม่ผ่าน ${fail}/${tests.length}` : `\n✓ API ผ่านทั้งหมด ${tests.length} ข้อ`);
   process.exit(fail ? 1 : 0);
 })();
+
+test('รายงานเหตุการณ์: โพสต์ข้อความ+รูป -> ทุกคนเห็น + คนออนไลน์ได้รับแจ้งทันที · ดูรูปเต็ม · ทำเครื่องหมายแก้ไขแล้ว · ลบได้เฉพาะคนโพสต์', async () => {
+  const b = await client(T['แชทB'], 'ทุกคน');
+  const px = 'data:image/jpeg;base64,' + Buffer.from('fake-jpeg').toString('base64');
+  assert.equal((await call('POST', '/api/incidents', T['แชทA'], { text: '' })).status, 400, 'ต้องมีข้อความหรือรูป');
+  const r = await call('POST', '/api/incidents', T['แชทA'], { text: 'ท่อไอน้ำรั่ว', place: 'หม้อไอน้ำ 2', photo: px, thumb: px, lat: 16.4, lng: 102.8 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const live = await b.wait('incident');
+  assert.equal(live.place, 'หม้อไอน้ำ 2', 'คนออนไลน์ได้รับแจ้ง');
+  const list = (await call('GET', '/api/incidents', T['แชทC'])).body;
+  const it = list.find(x => x.id === r.body.id);
+  assert.ok(it && it.text === 'ท่อไอน้ำรั่ว' && it.thumb === px && it.has_photo && !('photo' in it), 'ทุกคนเห็น · รายการส่งแค่รูปเล็ก');
+  assert.equal((await call('GET', `/api/incidents/${r.body.id}/photo`, T['แชทC'])).body.photo, px, 'กดดูรูปเต็มได้');
+  assert.equal((await call('PATCH', `/api/incidents/${r.body.id}`, T['แชทC'], { done: true })).status, 403, 'คนอื่น (ไม่ใช่หัวหน้า) เปลี่ยนสถานะไม่ได้');
+  assert.equal((await call('PATCH', `/api/incidents/${r.body.id}`, T['แชทA'], { done: true })).status, 200);
+  assert.ok((await call('GET', '/api/incidents', T['แชทA'])).body.find(x => x.id === r.body.id).done_at, 'แก้ไขแล้ว');
+  assert.equal((await call('DELETE', `/api/incidents/${r.body.id}`, T['แชทC'])).status, 403, 'ลบของคนอื่นไม่ได้');
+  assert.equal((await call('DELETE', `/api/incidents/${r.body.id}`, T['แชทA'])).status, 200);
+  b.close();
+});
