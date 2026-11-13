@@ -1876,7 +1876,7 @@ function incidentSheet() {
   sheet(`<h3>รายงานสิ่งผิดปกติ</h3>
     <div class="incpick"><button class="btn" type="button" id="iCam">${icon('camera')}ถ่ายรูป</button><button class="btn" type="button" id="iGal">เลือกรูป</button></div>
     <div id="iPrev" class="incprev hidden"></div>
-    <label class="lbl">ระดับ</label><div class="lvpick" role="radiogroup" aria-label="ระดับ">
+    <label class="lbl lvlbl">ระดับ</label><div class="lvpick" role="radiogroup" aria-label="ระดับ">
       <button type="button" class="lv-low on" data-lv="low" role="radio" aria-checked="true">ต่ำ</button>
       <button type="button" class="lv-med" data-lv="medium" role="radio" aria-checked="false">ปานกลาง</button>
       <button type="button" class="lv-high" data-lv="high" role="radio" aria-checked="false">สูง</button></div>

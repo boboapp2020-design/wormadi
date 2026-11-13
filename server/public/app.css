@@ -535,3 +535,5 @@ select.sel-sm { min-height:40px; padding:6px 34px 6px 12px; border-radius:10px; 
 .cm.mine .grow > div { background:var(--mine-bg); }
 .cmin { display:flex; gap:8px; align-items:center; } .cmin .field { margin:0; }
 .cmin .send { background:var(--primary); color:var(--on-primary); border-radius:50%; width:48px; height:48px; flex:none; }
+/* level label: lift it clear of the buttons (Thai tone marks were clipped) */
+label.lbl.lvlbl { margin:4px 2px 8px; line-height:1.6; }
