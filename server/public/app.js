@@ -1727,10 +1727,12 @@ ROUTES.game = async p => {
   };
   const act = async (a, body) => {
     if (a === 'move') {
-      if (busy) return; busy = true; applyLocal(body);
-      try { const r = await api(`/api/games/${gid}/move`, { method: 'POST', body }); g.state = r.state; g.status = r.status; g.turn = r.turn; g.winner = r.winner; g.result = r.result; draw(); }
-      catch (e) { toast(e.message); await load(); }
-      busy = false; return;
+      if (busy || anim) return; busy = true;
+      const shown = g.kind === 'checkers' ? playPath(g.state.b, body.path) : Promise.resolve();
+      applyLocal(body);
+      try { const r = await api(`/api/games/${gid}/move`, { method: 'POST', body }); g.state = r.state; g.status = r.status; g.turn = r.turn; g.winner = r.winner; g.result = r.result; }
+      catch (e) { toast(e.message); await shown; await load(); busy = false; return; }
+      await shown; draw(); busy = false; return;
     }
     if (busy) return; busy = true;
     try { await api(`/api/games/${gid}/${a}`, { method: 'POST', body: body || {} }); } catch (e) { toast(e.message); }
@@ -1770,26 +1772,54 @@ ROUTES.game = async p => {
   };
   const xoBoard = myTurn => `<div class="xo">${g.state.b.map((v, i) => `<button type="button" class="xc ${v === 'X' ? 'x' : v === 'O' ? 'o' : ''} ${g.state.line && g.state.line.includes(i) ? 'win' : ''}" ${myTurn && !v ? `data-cell="${i}"` : 'disabled'} aria-label="ช่อง ${i + 1}">${v === 'X' ? '✕' : v === 'O' ? '○' : ''}</button>`).join('')}</div>`;
   const checkersBoard = myTurn => {
-    const flip = g.side === 2, b = g.state.b, N = b.length;
-    const starts = myTurn ? g.legal.map(p => p[0].join()) : [];
-    const dests = sel ? g.legal.filter(p => p[0].join() === sel.join()).map(p => p[p.length - 1].join()) : [];
-    const last = g.state.last ? [g.state.last[0].join(), g.state.last[g.state.last.length - 1].join()] : [];
+    const flip = g.side === 2, b = anim ? anim.b : g.state.b, N = b.length;
+    const starts = myTurn && !anim ? g.legal.map(p => p[0].join()) : [];
+    const dests = sel && !anim ? g.legal.filter(p => p[0].join() === sel.join()).map(p => p[p.length - 1].join()) : [];
+    const lastP = anim ? anim.last : g.state.last, last = lastP ? [lastP[0].join(), lastP[lastP.length - 1].join()] : [];
     let h = '<div class="ckb">';
     for (let ri = 0; ri < N; ri++) for (let ci = 0; ci < N; ci++) {
       const r = flip ? N - 1 - ri : ri, c = flip ? N - 1 - ci : ci, v = b[r][c], k = `${r},${c}`, dark = (r + c) % 2 === 1;
-      const pc = v ? `<i class="pc ${v.toLowerCase() === 'a' ? 'w' : 'k'} ${v === 'A' || v === 'B' ? 'king' : ''} ${sel && sel.join() === k ? 'sel' : ''} ${starts.includes(k) ? 'can' : ''}">${v === 'A' || v === 'B' ? '♛' : ''}</i>` : '';
-      h += `<div class="sq ${dark ? 'dk' : 'lt'} ${dests.includes(k) ? 'dest' : ''} ${last.includes(k) ? 'last' : ''}" ${dark && myTurn ? `data-sq="${k}"` : ''}>${pc}</div>`;
+      const pc = v ? `<i class="pc ${anim && anim.cap === k ? 'cap' : ''} ${v.toLowerCase() === 'a' ? 'w' : 'k'} ${v === 'A' || v === 'B' ? 'king' : ''} ${sel && sel.join() === k ? 'sel' : ''} ${starts.includes(k) ? 'can' : ''}">${v === 'A' || v === 'B' ? '♛' : ''}</i>` : '';
+      h += `<div class="sq ${dark ? 'dk' : 'lt'} ${dests.includes(k) ? 'dest' : ''} ${last.includes(k) ? 'last' : ''}" ${dark && myTurn && !anim ? `data-sq="${k}"` : ''}>${pc}</div>`;
     }
     return h + '</div>';
   };
+  let anim = null;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  /** replay a move slowly: hop by hop, showing which piece is taken (only when the move captures something) */
+  const playPath = async (b0, path) => {
+    const b = JSON.parse(JSON.stringify(b0)), piece = b[path[0][0]][path[0][1]];
+    const hops = [];
+    for (let i = 1; i < path.length; i++) {
+      const dr = Math.sign(path[i][0] - path[i - 1][0]), dc = Math.sign(path[i][1] - path[i - 1][1]);
+      let cap = null;
+      for (let r = path[i - 1][0] + dr, c = path[i - 1][1] + dc; r !== path[i][0]; r += dr, c += dc) if (b[r][c]) { cap = [r, c]; break; }
+      hops.push(cap);
+    }
+    if (!hops.some(Boolean)) return;                                  // a plain step needs no show
+    anim = { b, last: [path[0], path[0]] }; b[path[0][0]][path[0][1]] = piece;
+    for (let i = 1; i < path.length; i++) {
+      const cap = hops[i - 1];
+      b[path[i - 1][0]][path[i - 1][1]] = ''; b[path[i][0]][path[i][1]] = piece;
+      anim.last = [path[0], path[i]]; anim.cap = cap ? cap.join() : null; draw();
+      await sleep(cap ? 650 : 300);                                    // the captured piece glows red
+      if (cap) { b[cap[0]][cap[1]] = ''; anim.cap = null; draw(); await sleep(350); }
+    }
+    anim = null;
+  };
   const tapSquare = sq => {
+    if (anim) return;
     const k = sq.join();
     if (g.legal.some(p => p[0].join() === k)) { sel = sq; return draw(); }
     if (sel) { const p = g.legal.find(p => p[0].join() === sel.join() && p[p.length - 1].join() === k); if (p) return act('move', { path: p }); }
     sel = null; draw();
   };
   const load = async () => {
-    try { g = await api(`/api/games/${gid}`); } catch (e) { if ($('gBody')) $('gBody').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    const old = g && g.state && g.state.b, oldLast = g && g.state && JSON.stringify(g.state.last);
+    let ng;
+    try { ng = await api(`/api/games/${gid}`); } catch (e) { if ($('gBody')) $('gBody').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    g = ng;
+    if (S.route === 'game' && old && g.kind === 'checkers' && g.state.last && JSON.stringify(g.state.last) !== oldLast && !anim) await playPath(old, g.state.last);
     if (S.route === 'game') draw();
   };
   S.gameReload = id => { if (id === gid) load(); };

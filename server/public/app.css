@@ -609,3 +609,8 @@ label.lbl.lvlbl { margin:4px 2px 8px; line-height:1.6; }
 .airbar.top { top:calc(70px + var(--safe-area-inset-top, 0px)); bottom:auto; }
 
 .ckb, .xo { touch-action:manipulation; -webkit-tap-highlight-color:transparent; } .sq, .xc { user-select:none; }
+
+/* a piece that is being taken: glows red and shrinks before it is removed */
+.pc.cap { animation:capGlow .65s ease-in-out forwards; }
+@keyframes capGlow { 0% { box-shadow:0 0 0 3px #ff3b30, 0 0 14px 4px rgba(255,59,48,.9); } 60% { box-shadow:0 0 0 4px #ff3b30, 0 0 18px 6px rgba(255,59,48,.9); transform:scale(1.05); } 100% { box-shadow:0 0 0 4px #ff3b30, 0 0 8px 2px rgba(255,59,48,.6); transform:scale(.82); opacity:.55; } }
+@media (prefers-reduced-motion: reduce) { .pc.cap { animation:none; box-shadow:0 0 0 4px #ff3b30; opacity:.6; } }
