@@ -1967,6 +1967,7 @@ ROUTES.settings = () => {
       ${admin ? row('sAdmin', 'settings', 'จัดการระบบ (ผู้ดูแล)', 'เพิ่ม/ลบสมาชิก กลุ่ม สิทธิ์ ประกาศ') : ''}
     </div>
     <div class="list">
+      ${!NATIVE && /Android/i.test(navigator.userAgent) ? row('sApk', 'download', 'ดาวน์โหลดแอป Android', 'ได้ยินเสียงวอแม้ปัดปิดแอป') : ''}
       ${row('sHelp', 'help', 'วิธีใช้')}
       ${row('sAbout', 'info', 'เกี่ยวกับแอป')}
       <button class="setrow" id="sOut" style="width:100%;background:none;border:0;text-align:left;color:var(--err-fg)">${icon('logout', 'i lead')}<div class="grow"><b>ออกจากระบบ</b></div></button>
@@ -1980,6 +1981,7 @@ ROUTES.settings = () => {
     on('sInstall', doInstall); on('sBatt', () => WN.openBatterySettings());
     on('sInvite', invite); on('sMembers', () => ACC() ? go('members') : toast('ใช้ได้เมื่อใช้เซิร์ฟเวอร์ Cloudflare'));
     on('sReport', () => go('report')); on('sLog', () => { location.href = (serverBase || '') + '/log.html'; }); on('sAdmin', () => go('admin'));
+    on('sApk', () => { location.href = APK_URL; });
     on('sHelp', help); on('sAbout', about);
     on('sOut', () => { if (confirm('ออกจากระบบ?')) signOut(); });
     const w = $('optWake'); if (w) w.onchange = () => { lsSet('walkie_wake', w.checked ? '1' : '0'); setWake(w.checked); };
@@ -2180,6 +2182,7 @@ const standalone = () => matchMedia('(display-mode: standalone)').matches || nav
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; });
 window.addEventListener('appinstalled', () => { installEvt = null; toast('ติดตั้งแล้ว เปิดจากไอคอนบนหน้าจอได้เลย'); for (const el of $$('[data-install]')) el.remove(); });
 const UA = navigator.userAgent || '';
+const APK_URL = 'https://github.com/boboapp2020-design/wormadi/releases/download/android/wormadi.apk';
 const IOS = /iPhone|iPad|iPod/i.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const INAPP = /\bLine\/|FBAN|FBAV|FB_IAB|Instagram|Messenger|MicroMessenger|Zalo|TikTok/i.test(UA);
 // LINE's in-app browser cannot install apps: ask LINE to reopen this page in the phone's normal browser
