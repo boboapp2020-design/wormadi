@@ -1,5 +1,6 @@
 # Builds the WORMADI Android app (APK) on every push that touches the app or the web UI.
-# Download it from: Actions -> latest "Android APK" run -> Artifacts -> wormadi-android
+# Download: https://github.com/boboapp2020-design/wormadi/releases/download/android/wormadi.apk (signed builds)
+# or Actions -> latest "Android APK" run -> Artifacts -> wormadi-android
 # Optional secrets (Settings -> Secrets and variables -> Actions) so updates install over the old app:
 #   ANDROID_KEYSTORE_B64       base64 of the PKCS12 signing key (alias "wormadi")
 #   ANDROID_KEYSTORE_PASSWORD  its password
