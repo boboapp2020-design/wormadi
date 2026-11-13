@@ -464,8 +464,8 @@ function onMessage(m) {
     case 'react': S.chat.reactions[m.id] = m.by; const el = $('r-' + m.id); if (el) el.innerHTML = reactsHtml(m.id); break;
     case 'game': {
       const here = S.route === 'game' && Number(S.params.id) === m.id;
-      if (here && S.gameReload) S.gameReload(m.id); else if (S.route === 'games') render();
-      if (!S.user || m.to !== S.user.id) break;                           // I made this move myself (other screen)
+      if (!S.user || m.to !== S.user.id) break;                           // I made this move myself (my screen is already up to date)
+      if (here && S.gameReload) S.gameReload(m.id); else if (S.route === 'games') render();                           // I made this move myself (other screen)
       if (m.ev === 'invite') { vibrate([100, 60, 100]); if (!NATIVE) beep(740, 0.08); if (document.hidden) systemNotify('🎮 ' + m.by + ' ชวนเล่นเกม', GN[m.kind] || '', 'game'); gameInviteDialog(m); }
       else if (!here) {
         const t = { accept: '🎮 ' + m.by + ' ตอบรับแล้ว เริ่มเล่นได้', decline: m.by + ' ไม่รับคำชวนเล่นเกม', move: '🎮 ถึงตาคุณแล้ว · ' + m.by, end: '🎮 เกมจบแล้ว · ' + m.by, resign: '🎮 ' + m.by + ' ยอมแพ้ · คุณชนะ', cancel: m.by + ' ยกเลิกคำชวน' }[m.ev];
@@ -1704,7 +1704,34 @@ ROUTES.game = async p => {
   const gid = Number(p.id), me = S.user || {};
   let g = null, sel = null, busy = false;
   mount(`<div class="page">${header('<span id="gTitle">เกม</span>')}<div class="scroll" id="gBody"><div class="empty">กำลังโหลด…</div></div></div>`, root => bindBack(root, 'games'));
+  // a move shows on my screen at once (optimistic); the server confirms in the background and the screen is re-synced only if it refuses
+  const applyLocal = body => {
+    const st = JSON.parse(JSON.stringify(g.state)), b = st.b, mine = g.side;
+    if (g.kind === 'xo') {
+      b[body.cell] = mine === 1 ? 'X' : 'O';
+      const L = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]].find(l => l.every(k => b[k] === b[body.cell]));
+      if (L) { st.line = L; g.status = 'done'; g.winner = me.id; g.result = 'win'; } else if (b.every(Boolean)) { g.status = 'done'; g.winner = null; g.result = 'draw'; }
+    } else {
+      const p = body.path, piece = b[p[0][0]][p[0][1]];
+      for (let i = 1; i < p.length; i++) {                       // remove the piece jumped over in each hop
+        const dr = Math.sign(p[i][0] - p[i - 1][0]), dc = Math.sign(p[i][1] - p[i - 1][1]);
+        for (let r = p[i - 1][0] + dr, c = p[i - 1][1] + dc; r !== p[i][0]; r += dr, c += dc) if (b[r][c]) { b[r][c] = ''; break; }
+      }
+      const [r1, c1] = p[p.length - 1]; b[p[0][0]][p[0][1]] = '';
+      b[r1][c1] = (piece === 'a' || piece === 'b') && r1 === (mine === 1 ? 0 : b.length - 1) ? piece.toUpperCase() : piece;
+      st.last = p;
+    }
+    g.state = st; g.legal = [];
+    if (g.status === 'playing') g.turn = g.p1 === me.id ? g.p2 : g.p1; else g.turn = null;
+    sel = null; draw();
+  };
   const act = async (a, body) => {
+    if (a === 'move') {
+      if (busy) return; busy = true; applyLocal(body);
+      try { const r = await api(`/api/games/${gid}/move`, { method: 'POST', body }); g.state = r.state; g.status = r.status; g.turn = r.turn; g.winner = r.winner; g.result = r.result; draw(); }
+      catch (e) { toast(e.message); await load(); }
+      busy = false; return;
+    }
     if (busy) return; busy = true;
     try { await api(`/api/games/${gid}/${a}`, { method: 'POST', body: body || {} }); } catch (e) { toast(e.message); }
     busy = false; sel = null; await load();

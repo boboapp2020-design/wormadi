@@ -607,3 +607,5 @@ label.lbl.lvlbl { margin:4px 2px 8px; line-height:1.6; }
 .xo, .ckb { flex:none; } .xo { aspect-ratio:auto; } .xc { aspect-ratio:1; min-height:0; }
 .sq { aspect-ratio:1; }
 .airbar.top { top:calc(70px + var(--safe-area-inset-top, 0px)); bottom:auto; }
+
+.ckb, .xo { touch-action:manipulation; -webkit-tap-highlight-color:transparent; } .sq, .xc { user-select:none; }

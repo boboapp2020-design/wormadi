@@ -543,9 +543,9 @@ async function api(req, env, url) {
         } else {
           await db.prepare('UPDATE games SET state = ?, turn = ?, updated = ? WHERE id = ?').bind(JSON.stringify(out.state), side === 1 ? g.p2 : g.p1, now, id).run();
         }
-        await tell(g, out.end ? 'end' : 'move');
-        if (!out.end) await pushTo(env, [side === 1 ? g.p2 : g.p1]).catch(() => {});
-        return json({ ok: true });
+        const nextTurn = out.end ? null : side === 1 ? g.p2 : g.p1, winId = out.end ? (out.end.winner === 0 ? null : out.end.winner === 1 ? g.p1 : g.p2) : null;
+        await Promise.all([tell(g, out.end ? 'end' : 'move'), out.end ? null : pushTo(env, [nextTurn]).catch(() => {})]);
+        return json({ ok: true, state: out.state, status: out.end ? 'done' : 'playing', turn: nextTurn, winner: winId, result: out.end ? (winId ? 'win' : 'draw') : null });
       }
     }
     return fail(404, 'ไม่พบ');
