@@ -462,3 +462,9 @@ select.sel-sm { min-height:40px; padding:6px 34px 6px 12px; border-radius:10px; 
 .gloss { margin:0 4px 6px; font-size:14px; line-height:1.4; }
 .gloss dt { font-weight:700; margin-top:8px; }
 .gloss dd { margin:2px 0 0; color:var(--muted); }
+
+/* someone is talking: shown on every page except the talk page */
+.airbar { position:fixed; left:0; right:0; margin:0 auto; width:min(calc(100% - 24px), 416px); bottom:calc(16px + env(safe-area-inset-bottom)); z-index:60; display:flex; align-items:center; gap:10px; padding:12px 16px; border:0; border-radius:16px; background:var(--listen); color:var(--on-listen); font:inherit; font-size:16px; text-align:left; box-shadow:var(--shadow); cursor:pointer; animation:airIn .18s ease-out; }
+.airbar svg.i { width:22px; height:22px; flex:none; }
+.airbar small { display:block; font-size:13px; opacity:.9; }
+@keyframes airIn { from { opacity:0; } }

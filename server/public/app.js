@@ -209,6 +209,7 @@ function render() {
   if (!signedIn && !['splash', 'login'].includes(route)) return go('splash', {}, true);
   if (signedIn && ACC() && S.user && S.user.must_change && route !== 'setpw') return go('setpw', {}, true);
   S.route = route; S.params = Object.fromEntries(new URLSearchParams(q || ''));
+  if (route === 'ptt') { const ab = document.getElementById('airBar'); if (ab) ab.remove(); }
   closeSheet();
   $('view').innerHTML = '';
   ROUTES[route](S.params);
@@ -328,7 +329,7 @@ window.addEventListener('online', () => { if (!stopped && !NATIVE && (!ws || ws.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     // app minimised / screen off: stay connected while signed in, so SOS always rings (only logging out stops it)
-    if (!NATIVE && S.me) { if (!keepAudio) setKeepAlive(true, true); else keepAudio.play().catch(() => {}); if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {}); }
+    if (!NATIVE && S.me) { if (!keepAudio) setKeepAlive(true, true); else keepAudio.play().catch(() => {}); if (!audioCtx) ensureCtx(); else if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {}); }
     // "ได้ยินเสียงคุย…" switched off: step out of the group (no voice) but keep the connection for SOS
     if (!keepOn() && S.me && S.me.channel && !isDm(S.me.channel)) { S.pausedRoom = S.me.channel; stopTalking(true); joinRaw(''); }
     return;
@@ -466,6 +467,7 @@ function ensureCtx() {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     outGain = audioCtx.createGain(); outGain.connect(audioCtx.destination);
+    audioCtx.onstatechange = () => { renderUnlock(); if (S.hearing) renderTalk(); };   // sound unlocked -> drop the "tap to hear" hint
     applyVolume();
   }
   if (audioCtx.state === 'suspended') audioCtx.resume().finally(renderUnlock);
@@ -473,7 +475,8 @@ function ensureCtx() {
 }
 function applyVolume() { if (outGain) outGain.gain.value = S.prefs.speaker ? (S.prefs.volume / 100) * 1.4 : 0; }
 function renderUnlock() { const b = $('unlockBtn'); if (b) b.classList.toggle('hidden', NATIVE || !audioCtx || audioCtx.state !== 'suspended'); }
-document.addEventListener('pointerdown', () => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().finally(renderUnlock); }, true);
+const unlockAudio = () => { if (NATIVE || !S.me) return; if (!audioCtx || audioCtx.state === 'suspended') ensureCtx(); if (!keepAudio) setKeepAlive(true, true); else if (keepAudio.paused) keepAudio.play().catch(() => {}); };
+for (const ev of ['pointerdown', 'touchend', 'keydown']) document.addEventListener(ev, unlockAudio, { capture: true, passive: true });
 async function ensureMic() {
   ensureCtx();
   if (processor) return;
@@ -499,7 +502,9 @@ async function ensureMic() {
   micSource.connect(processor); processor.connect(mute); mute.connect(audioCtx.destination);
 }
 function playChunk(buf) {
-  if (!audioCtx || !buf.byteLength || S.skipRx) return;
+  if (!buf.byteLength || S.skipRx) return;
+  if (!audioCtx) ensureCtx();
+  if (!audioCtx) return;
   const pcm = new Int16Array(buf), f = new Float32Array(pcm.length);
   let peak = 0;
   for (let i = 0; i < pcm.length; i++) { f[i] = pcm[i] / 0x7fff; peak = Math.max(peak, Math.abs(f[i])); }
@@ -566,7 +571,18 @@ function renderTalk() {
   for (const el of $$('[data-chcount]')) el.textContent = `${cnt} คนออนไลน์`;
   const hb = $('hearBar');
   if (hb) { hb.classList.toggle('hidden', !other); if (other) hb.innerHTML = `${icon('volume')}<span><b>${esc(t)}</b> กำลังพูด${where ? ` · ห้อง <b>${esc(where)}</b>` : ''}</span>`; }
+  renderAirBar(other ? t : null, where);
   updateMediaSession();
+}
+/** floating bar on pages other than the talk page: who is talking now (the voice plays on every page) */
+function renderAirBar(t, where) {
+  let el = $('airBar');
+  const locked = !NATIVE && (!audioCtx || audioCtx.state !== 'running');
+  if (!t || S.route === 'ptt' || !S.me) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement('button'); el.id = 'airBar'; el.type = 'button'; el.className = 'airbar'; document.body.appendChild(el); }
+  el.innerHTML = `${icon('volume')}<span class="grow"><b>${esc(t)}</b> กำลังพูด${where ? ` · ${esc(where)}` : ''}${locked && !S.skipRx ? '<small>แตะเพื่อเปิดเสียง</small>' : ''}</span>`;
+  el.onclick = () => { ensureCtx(); go('ptt'); };
+  const nav = document.querySelector('nav.nav'); el.style.bottom = (nav ? Math.round(nav.getBoundingClientRect().height) + 12 : 16) + 'px';   // just above the bottom tabs
 }
 const levels = new Array(48).fill(0);
 let lastLevel = 0;
@@ -817,6 +833,7 @@ ROUTES.login = () => {
 };
 async function afterSignIn() {
   await Promise.all([loadChannels(), refreshMe()]);
+  ensureCtx();
   startConnection();
   enablePush(true);
 }
@@ -2224,7 +2241,7 @@ function setKeepAlive(on, quiet) {
     const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
     str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
     v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, 'data'); v.setUint32(40, n * 2, true);
-    for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, (Math.random() * 6 - 3) | 0, true);
+    for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, (Math.random() * 24 - 12) | 0, true);
     keepAudio = new Audio(URL.createObjectURL(new Blob([b], { type: 'audio/wav' }))); keepAudio.loop = true;
     keepAudio.play().catch(() => { keepAudio = null; if (!quiet) toast('แตะหน้าจอหนึ่งครั้งเพื่อเริ่มฟังต่อเมื่อพับแอป'); });
     if ('mediaSession' in navigator) for (const a of ['play', 'pause']) { try { navigator.mediaSession.setActionHandler(a, () => { wantTalk ? (pressed = false, stopTalking()) : (pressed = true, startTalking()); keepAudio && keepAudio.play().catch(() => {}); }); } catch {} }
