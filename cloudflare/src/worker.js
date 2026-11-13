@@ -397,19 +397,43 @@ async function api(req, env, url) {
   }
   if (seg[1] === 'incidents' && id && seg[3] === 'comments' && m === 'GET') {
     const { results } = await db.prepare(
-      `SELECT c.id, c.ts, c.user_id, c.text, u.name, u.dept, u.avatar IS NOT NULL AS has_avatar
-       FROM incident_comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.incident_id = ? ORDER BY c.id LIMIT 200`).bind(id).all();
+      `SELECT c.id, c.ts, c.user_id, c.text, c.parent_id, c.reply_to, u.name, u.dept, u.avatar IS NOT NULL AS has_avatar, r.name AS reply_name
+       FROM incident_comments c LEFT JOIN users u ON u.id = c.user_id LEFT JOIN users r ON r.id = c.reply_to
+       WHERE c.incident_id = ? ORDER BY c.id LIMIT 300`).bind(id).all();
     return json(results);
   }
   if (seg[1] === 'incidents' && id && seg[3] === 'comments' && m === 'POST') {
     const inc = await db.prepare('SELECT user_id FROM incidents WHERE id = ?').bind(id).first();
     if (!inc) return fail(404, 'ไม่พบรายงานนี้');
-    const text = str((await readJson(req)).text, 500);
+    const b = await readJson(req);
+    const text = str(b.text, 500);
     if (!text) return fail(400, 'กรุณาพิมพ์ความคิดเห็น');
+    let parent = null, replyTo = null;
+    if (b.parent_id) {
+      const pc = await db.prepare('SELECT id, user_id, parent_id FROM incident_comments WHERE id = ? AND incident_id = ?').bind(Number(b.parent_id), id).first();
+      if (!pc) return fail(404, 'ไม่พบความคิดเห็นที่จะตอบ');
+      parent = pc.parent_id || pc.id; replyTo = pc.user_id;
+    }
     const now = Date.now();
-    const r = await db.prepare('INSERT INTO incident_comments (incident_id, user_id, ts, text) VALUES (?, ?, ?, ?)').bind(id, me.id, now, text).run();
-    try { await roomCall(env, '/broadcast', { msg: { type: 'incident_comment', id, owner: inc.user_id, name: me.name, text: text.slice(0, 120) } }); } catch {}
+    const r = await db.prepare('INSERT INTO incident_comments (incident_id, user_id, ts, text, parent_id, reply_to) VALUES (?, ?, ?, ?, ?, ?)').bind(id, me.id, now, text, parent, replyTo).run();
+    try { await roomCall(env, '/broadcast', { msg: { type: 'incident_comment', id, cid: r.meta.last_row_id, owner: inc.user_id, reply_to: replyTo, from: me.id, name: me.name, text: text.slice(0, 120) } }); } catch {}
     return json({ ok: true, id: r.meta.last_row_id });
+  }
+  if (seg[1] === 'incidents' && id && seg[3] === 'comments' && seg[4] && m === 'DELETE') {   // delete my own comment (and its replies)
+    const cid = Number(seg[4]);
+    const c = await db.prepare('SELECT user_id FROM incident_comments WHERE id = ? AND incident_id = ?').bind(cid, id).first();
+    if (!c) return fail(404, 'ไม่พบความคิดเห็น');
+    if (c.user_id !== me.id && me.role !== 'admin') return fail(403, 'ลบได้เฉพาะความคิดเห็นของตัวเอง');
+    await db.batch([db.prepare('DELETE FROM incident_comments WHERE parent_id = ? AND incident_id = ?').bind(cid, id), db.prepare('DELETE FROM incident_comments WHERE id = ?').bind(cid)]);
+    return json({ ok: true });
+  }
+  if (seg[1] === 'incidents' && id && !seg[3] && m === 'GET') {          // one report (the comments page)
+    const row = await db.prepare(
+      `SELECT i.id, i.ts, i.user_id, i.level, i.text, i.place, i.lat, i.lng, i.thumb, i.photo IS NOT NULL AS has_photo, i.done_at,
+              u.name, u.dept, u.avatar IS NOT NULL AS has_avatar, d.name AS done_name
+       FROM incidents i LEFT JOIN users u ON u.id = i.user_id LEFT JOIN users d ON d.id = i.done_by WHERE i.id = ?`).bind(id).first();
+    if (!row) return fail(404, 'ไม่พบรายงานนี้ (อาจถูกลบแล้ว)');
+    return json(row);
   }
   if (seg[1] === 'incidents' && id && seg[3] === 'photo' && m === 'GET') {
     const r = await db.prepare('SELECT photo FROM incidents WHERE id = ?').bind(id).first();

@@ -473,10 +473,15 @@ function onMessage(m) {
       }
       if (S.route === 'incidents') render();
       break;
-    case 'incident_comment':
-      if (S.user && m.name !== S.user.name && m.owner === S.user.id) { vibrate([80]); toast(`💬 ${m.name} แสดงความคิดเห็นในรายงานของคุณ`); if (document.hidden) systemNotify(`💬 ${m.name} แสดงความคิดเห็น`, m.text, 'incident-cm'); }
-      if (S.route === 'incidents' && !$('cmList')) render();
+    case 'incident_comment': {
+      const here = S.route === 'incident' && Number(S.params.id) === m.id;
+      if (S.user && m.from !== S.user.id && !here && (m.reply_to === S.user.id || m.owner === S.user.id)) {
+        const txt = m.reply_to === S.user.id ? `💬 ${m.name} ตอบความคิดเห็นของคุณ` : `💬 ${m.name} แสดงความคิดเห็นในรายงานของคุณ`;
+        vibrate([80]); toast(txt); if (document.hidden) systemNotify(txt, m.text, 'incident-cm');
+      }
+      if (here && S.cmReload) S.cmReload(); else if (S.route === 'incidents') render();
       break;
+    }
     case 'incident_done':
       if (m.done && m.level === 'high') { toast(`✅ ${m.name} ปิดเหตุการณ์แล้ว (ปกติแล้ว)`); if ($('hiAlert')) closeSheet(); }
       refreshIncidentBadge(); if (S.route === 'incidents') render();
@@ -1875,33 +1880,80 @@ ROUTES.incidents = async p => {
         ${r.user_id === me.id || me.role === 'admin' ? `<button class="btn sm ghost" type="button" data-del="${r.id}">${icon('trash')}ลบ</button>` : ''}
       </div></article>`).join('')
     : `<div class="empty">${tab === 'open' ? 'ไม่มีเหตุการณ์ที่รอแก้ไข' : 'ยังไม่มีรายงาน'}</div>`;
-  for (const b of $$('[data-ph]', el)) b.onclick = async () => {
-    sheet('<div class="empty">กำลังโหลดรูป…</div>');
-    try { const d = await api(`/api/incidents/${b.dataset.ph}/photo`); sheet(`<img src="${d.photo}" alt="รูปเหตุการณ์" style="width:100%;border-radius:14px;display:block">`); } catch (e) { closeSheet(); toast(e.message); }
-  };
+  for (const b of $$('[data-ph]', el)) b.onclick = () => incidentPhoto(b.dataset.ph);
   for (const b of $$('[data-done]', el)) b.onclick = async () => { if (b.dataset.v === '1' && !await ask('ปิดเหตุการณ์ ยืนยันว่าปกติแล้ว?', { title: 'ปิดเหตุการณ์', yes: 'ปิดเหตุการณ์' })) return; try { await api(`/api/incidents/${b.dataset.done}`, { method: 'PATCH', body: { done: b.dataset.v === '1' } }); render(); } catch (e) { toast(e.message); } };
-  for (const b of $$('[data-cm]', el)) b.onclick = () => incidentComments(rows.find(r => r.id === Number(b.dataset.cm)));
+  for (const b of $$('[data-cm]', el)) b.onclick = () => go('incident', { id: b.dataset.cm });
   for (const b of $$('[data-del]', el)) b.onclick = async () => { if (!await ask('ลบรายงานนี้?', { title: 'ลบรายงาน', yes: 'ลบ', danger: true })) return; try { await api(`/api/incidents/${b.dataset.del}`, { method: 'DELETE' }); render(); } catch (e) { toast(e.message); } };
 };
-async function incidentComments(r) {
-  if (!r) return;
-  const me = S.user || {};
-  const draw = list => `<h3 style="margin-bottom:4px">ความคิดเห็น</h3><p class="small muted" style="margin:0 0 10px">${esc(r.name || '')}: ${esc((r.text || r.place || 'รูปเหตุการณ์').slice(0, 80))}</p>
-    <div class="cmlist" id="cmList">${list.length ? list.map(c => `<div class="cm ${c.user_id === me.id ? 'mine' : ''}">${avatar({ id: c.user_id, name: c.name, has_avatar: c.has_avatar }, 'av')}<div class="grow"><b>${esc(c.name || '—')}</b> <small class="muted">${agoText(c.ts)}</small><div>${esc(c.text)}</div></div></div>`).join('') : '<div class="empty">ยังไม่มีความคิดเห็น</div>'}</div>
-    <div class="cmin"><div class="field plain grow"><input id="cmTx" maxlength="500" placeholder="พิมพ์ความคิดเห็น…"></div><button class="ib send" type="button" id="cmGo" aria-label="ส่งความคิดเห็น">${icon('send')}</button></div>`;
-  const load = async () => { try { return await api(`/api/incidents/${r.id}/comments`); } catch (e) { toast(e.message); return []; } };
-  const open = list => sheet(draw(list), () => {
-    const box = $('cmList'); box.scrollTop = box.scrollHeight;
-    const send = async () => {
-      const t = $('cmTx').value.trim(); if (!t) return;
-      $('cmGo').disabled = true;
-      try { await api(`/api/incidents/${r.id}/comments`, { method: 'POST', body: { text: t } }); r.comments = (r.comments || 0) + 1; open(await load()); const cb = document.querySelector(`[data-cm="${r.id}"]`); if (cb) cb.innerHTML = icon('chat') + `ความคิดเห็น (${r.comments})`; }
-      catch (e) { toast(e.message); $('cmGo').disabled = false; }
-    };
-    $('cmGo').onclick = send; $('cmTx').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); send(); } };
-  });
-  S.cmOpen = r.id; open(await load());
+async function incidentPhoto(id) {
+  sheet('<div class="empty">กำลังโหลดรูป…</div>');
+  try { const d = await api(`/api/incidents/${id}/photo`); sheet(`<img src="${d.photo}" alt="รูปเหตุการณ์" style="width:100%;border-radius:14px;display:block">`); } catch (e) { closeSheet(); toast(e.message); }
 }
+/** the comments page: the report on top, every comment under it, a reply button on each one (like a social app) */
+ROUTES.incident = async p => {
+  const iid = Number(p.id), me = S.user || {};
+  let replyTo = null, busy = false;
+  mount(`<div class="page">${header('ความคิดเห็น')}
+    <div class="scroll" id="cmScroll"><div id="cmPost"></div><div class="cmcount small muted" id="cmCount"></div><div id="cmThread" class="cmthread"><div class="empty">กำลังโหลด…</div></div></div>
+    <div class="replying hidden" id="cmReplying"></div>
+    <div class="composer"><input id="cmTx" placeholder="เขียนความคิดเห็น…" maxlength="500" enterkeyhint="send"><button class="go" id="cmGo" type="button" aria-label="ส่ง">${icon('send')}</button></div></div>`, root => bindBack(root, 'incidents'));
+  const setReply = r => {
+    replyTo = r; const el = $('cmReplying'); if (!el) return;
+    el.classList.toggle('hidden', !r);
+    el.innerHTML = r ? `<span>กำลังตอบ <b>${esc(r.name)}</b></span><button class="ib" type="button" id="cmRx" aria-label="ยกเลิกการตอบ">${icon('x')}</button>` : '';
+    if (r) { $('cmRx').onclick = () => setReply(null); $('cmTx').placeholder = `ตอบ ${r.name}…`; $('cmTx').focus(); } else $('cmTx').placeholder = 'เขียนความคิดเห็น…';
+  };
+  const cmHtml = (c, root) => `<div class="cmt" data-c="${c.id}">${avatar({ id: c.user_id, name: c.name, has_avatar: c.has_avatar }, 'av')}
+      <div class="cmbody"><div class="cmbub"><b>${esc(c.name || '—')}</b>${c.dept ? `<small class="muted"> · ${esc(c.dept)}</small>` : ''}
+        <div class="cmtxt">${c.reply_name && c.reply_to !== root ? `<span class="to">@${esc(c.reply_name)}</span> ` : ''}${esc(c.text)}</div></div>
+        <div class="cmmeta"><span>${agoText(c.ts)}</span><button type="button" data-reply="${c.id}" data-rn="${esc(c.name || '')}">ตอบกลับ</button>${c.user_id === me.id || me.role === 'admin' ? `<button type="button" data-cdel="${c.id}" class="del">ลบ</button>` : ''}</div></div></div>`;
+  const draw = (post, list) => {
+    const lv = lvPill(post.level);
+    $('cmPost').innerHTML = `<article class="inc lv-${post.level} ${post.done_at ? 'done' : post.level === 'high' ? 'hot' : ''}" style="margin:12px 14px 4px">
+      ${!post.done_at && post.level === 'high' ? '<div class="redlight"><i></i>เหตุการณ์ระดับสูง · รอคนโพสต์ปิดเหตุการณ์</div>' : ''}
+      <div class="inchd">${avatar({ id: post.user_id, name: post.name, has_avatar: post.has_avatar }, 'av')}<div class="grow"><b>${esc(post.name || '—')}</b><small>${esc(post.dept || '')}${post.dept ? ' · ' : ''}${agoText(post.ts)}</small></div>
+        <div class="incpills">${lv}${post.done_at ? `<span class="pill ok">${icon('check')}ปิดแล้ว</span>` : ''}</div></div>
+      ${post.text ? `<p class="inctx">${esc(post.text)}</p>` : ''}
+      ${post.place ? `<div class="incpl">${icon('pin')}${esc(post.place)}${post.lat != null ? ` <a href="https://maps.google.com/?q=${post.lat},${post.lng}" target="_blank" rel="noopener">ดูแผนที่</a>` : ''}</div>` : ''}
+      ${post.thumb ? `<button class="incph" type="button" id="cmPh"><img src="${post.thumb}" alt="รูปเหตุการณ์"></button>` : ''}</article>`;
+    if ($('cmPh')) $('cmPh').onclick = () => incidentPhoto(post.id);
+    $('cmCount').textContent = list.length ? `ความคิดเห็นทั้งหมด ${list.length}` : '';
+    const tops = list.filter(c => !c.parent_id), kids = id => list.filter(c => c.parent_id === id);
+    $('cmThread').innerHTML = tops.length ? tops.map(c => `<div class="cmgroup">${cmHtml(c, c.user_id)}${kids(c.id).length ? `<div class="cmrep">${kids(c.id).map(k => cmHtml(k, c.user_id)).join('')}</div>` : ''}</div>`).join('')
+      : '<div class="empty">ยังไม่มีความคิดเห็น · เป็นคนแรกที่แสดงความคิดเห็น</div>';
+    loadAvatars($('cmPost')); loadAvatars($('cmThread'));
+    for (const x of $$('[data-reply]', $('cmThread'))) x.onclick = () => setReply({ id: Number(x.dataset.reply), name: x.dataset.rn });
+    for (const x of $$('[data-cdel]', $('cmThread'))) x.onclick = async () => {
+      if (!await ask('ลบความคิดเห็นนี้?\nคำตอบที่อยู่ใต้ความคิดเห็นนี้จะถูกลบด้วย', { title: 'ลบความคิดเห็น', yes: 'ลบ', danger: true })) return;
+      try { await api(`/api/incidents/${iid}/comments/${x.dataset.cdel}`, { method: 'DELETE' }); await load(); } catch (e) { toast(e.message); }
+    };
+  };
+  const load = async keepScroll => {
+    try {
+      const [post, list] = await Promise.all([api(`/api/incidents/${iid}`), api(`/api/incidents/${iid}/comments`)]);
+      if (S.route !== 'incident' || !$('cmThread')) return;
+      const sc = $('cmScroll'), top = sc.scrollTop;
+      draw(post, list);
+      if (keepScroll) sc.scrollTop = top;
+      return list;
+    } catch (e) { if ($('cmThread')) $('cmThread').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  S.cmReload = () => load(true);
+  const send = async () => {
+    const t = $('cmTx').value.trim(); if (!t || busy) return;
+    busy = true; $('cmGo').disabled = true;
+    try {
+      const r = await api(`/api/incidents/${iid}/comments`, { method: 'POST', body: { text: t, parent_id: replyTo ? replyTo.id : undefined } });
+      $('cmTx').value = ''; setReply(null);
+      await load();
+      const el = document.querySelector(`[data-c="${r.id}"]`); if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } catch (e) { toast(e.message); }
+    busy = false; if ($('cmGo')) $('cmGo').disabled = false;
+  };
+  $('cmGo').onclick = send;
+  $('cmTx').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); send(); } };
+  await load();
+};
 function incidentSheet() {
   const d = { photo: null, thumb: null, lat: null, lng: null, level: 'low' };
   sheet(`<h3>รายงานสิ่งผิดปกติ</h3>

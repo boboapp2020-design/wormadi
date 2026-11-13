@@ -632,3 +632,25 @@ test('รายงานเหตุการณ์ระดับสูง: ท
   await call('DELETE', `/api/incidents/${r.body.id}`, T['แชทA']); await call('DELETE', `/api/incidents/${low.body.id}`, T['แชทA']);
   b.close(); c.close();
 });
+
+test('รายงานเหตุการณ์: ตอบกลับความคิดเห็น (reply) แบบโซเชียล · ตอบซ้อนอยู่ในเธรดเดียวกัน · ลบของตัวเองได้', async () => {
+  const idOf = async tk => (await call('GET', '/api/me', tk)).body.user.id;
+  const ia = await idOf(T['แชทA']), ib = await idOf(T['แชทB']), ic = await idOf(T['แชทC']);
+  const inc = await call('POST', '/api/incidents', T['แชทA'], { text: 'ท่อรั่ว', level: 'medium' });
+  const base = `/api/incidents/${inc.body.id}`;
+  assert.equal((await call('GET', base, T['แชทC'])).body.text, 'ท่อรั่ว', 'เปิดดูรายงานเดียวได้');
+  assert.equal((await call('GET', '/api/incidents/99999999', T['แชทC'])).status, 404);
+  const c1 = await call('POST', base + '/comments', T['แชทB'], { text: 'ผมเห็นด้วย' });
+  const r1 = await call('POST', base + '/comments', T['แชทC'], { text: 'ผมไปดูให้', parent_id: c1.body.id });
+  assert.equal(r1.status, 200);
+  const r2 = await call('POST', base + '/comments', T['แชทA'], { text: 'ขอบคุณครับ', parent_id: r1.body.id });   // reply to a reply
+  assert.equal((await call('POST', base + '/comments', T['แชทA'], { text: 'x', parent_id: 99999999 })).status, 404, 'ตอบความคิดเห็นที่ไม่มี = 404');
+  const list = (await call('GET', base + '/comments', T['แชทA'])).body;
+  const rr1 = list.find(x => x.id === r1.body.id), rr2 = list.find(x => x.id === r2.body.id);
+  assert.equal(rr1.parent_id, c1.body.id); assert.equal(rr1.reply_to, ib);
+  assert.equal(rr2.parent_id, c1.body.id, 'ตอบซ้อน = อยู่เธรดเดียวกับความคิดเห็นแรก'); assert.equal(rr2.reply_to, ic); assert.ok(rr2.reply_name, 'บอกว่าตอบใคร');
+  assert.equal((await call('DELETE', base + '/comments/' + c1.body.id, T['แชทC'])).status, 403, 'ลบของคนอื่นไม่ได้');
+  assert.equal((await call('DELETE', base + '/comments/' + c1.body.id, T['แชทB'])).status, 200, 'ลบของตัวเองได้');
+  assert.equal((await call('GET', base + '/comments', T['แชทA'])).body.length, 0, 'ลบความคิดเห็นหลัก = คำตอบหายด้วย');
+  await call('DELETE', base, T['แชทA']);
+});
