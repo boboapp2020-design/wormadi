@@ -4,6 +4,7 @@
 //   สิทธิ์: user (พนักงาน) < lead (หัวหน้า: มอบงาน, ปิดเหตุ SOS, ดูรายงาน/log) < admin (ผู้ดูแลระบบ)
 import { WalkieRoom, reactionsFor, EMOJIS, LOBBY } from './room.js';
 import { toWav, compress } from './codec.js';
+import { KINDS, startState, applyMove, legalFor } from './games.js';
 import { pushAll, pushTo, pushReady } from './push.js';
 import { hashPassword, verifyPassword, createSession, userFromToken, bearer, sha256, roleAtLeast, ROLES, PUBLIC_USER } from './auth.js';
 
@@ -69,6 +70,7 @@ export default {
     await cleanChat(env);
     const day = 86_400_000, now = Date.now();
     await env.DB.prepare('DELETE FROM reminders WHERE done_at IS NOT NULL AND done_at < ?').bind(now - 30 * day).run();
+    await env.DB.prepare('DELETE FROM games WHERE updated < ?').bind(now - 3 * day).run();   // duel games keep 3 days
     await env.DB.batch([   // incident board keeps 7 days
       env.DB.prepare('DELETE FROM incident_comments WHERE incident_id IN (SELECT id FROM incidents WHERE ts < ?)').bind(now - 7 * day),
       env.DB.prepare('DELETE FROM incidents WHERE ts < ?').bind(now - 7 * day),
@@ -472,6 +474,82 @@ async function api(req, env, url) {
 
   // ---------------------------------------------------------------- private chat (แชทส่วนตัว)
   // messages live in channel "dm:<smaller id>:<bigger id>", same as the private call channel
+  // ---------------------------------------------------------------- duel games (XO / หมากฮอส)
+  if (seg[1] === 'games') {
+    const SEL = 'SELECT g.*, a.name AS n1, b.name AS n2 FROM games g JOIN users a ON a.id = g.p1 JOIN users b ON b.id = g.p2';
+    const view = g => {
+      const side = g.p1 === me.id ? 1 : 2, st = JSON.parse(g.state);
+      return { id: g.id, kind: g.kind, status: g.status, p1: g.p1, p2: g.p2, n1: g.n1, n2: g.n2, side, state: st, turn: g.turn, winner: g.winner, result: g.result,
+        legal: g.status === 'playing' && g.turn === me.id ? legalFor(g.kind, st, side) : [], updated: g.updated };
+    };
+    const tell = (g, ev) => roomCall(env, '/broadcast', { msg: { type: 'game', id: g.id, kind: g.kind, ev, by: me.name, to: g.p1 === me.id ? g.p2 : g.p1 }, userIds: [g.p1, g.p2] }).catch(() => {});
+    const KN = k => (k === 'xo' ? 'XO' : 'หมากฮอส');
+    if (!seg[2] && m === 'GET') {
+      const { results } = await db.prepare(SEL + " WHERE (g.p1 = ?1 OR g.p2 = ?1) AND (g.status IN ('invited', 'playing') OR (g.status = 'done' AND g.updated > ?2)) ORDER BY g.updated DESC LIMIT 40").bind(me.id, Date.now() - 86_400_000).all();
+      return json(results.map(g => ({ ...view(g), state: undefined, legal: undefined })));
+    }
+    if (!seg[2] && m === 'POST') {
+      const b = await readJson(req), opp = Number(b.opponent), kind = String(b.kind);
+      if (!KINDS.includes(kind)) return fail(400, 'ไม่มีเกมนี้');
+      if (!opp || opp === me.id) return fail(400, 'เลือกเพื่อนที่จะชวนเล่น');
+      const u = await db.prepare('SELECT id, name FROM users WHERE id = ? AND active = 1').bind(opp).first();
+      if (!u) return fail(404, 'ไม่พบผู้ใช้นี้');
+      const dup = await db.prepare("SELECT id FROM games WHERE kind = ? AND status IN ('invited', 'playing') AND ((p1 = ? AND p2 = ?) OR (p1 = ? AND p2 = ?))").bind(kind, me.id, opp, opp, me.id).first();
+      if (dup) return json({ ok: true, id: dup.id, existing: true });
+      const now = Date.now();
+      const r = await db.prepare("INSERT INTO games (kind, p1, p2, status, state, turn, created, updated) VALUES (?, ?, ?, 'invited', ?, ?, ?, ?)").bind(kind, me.id, opp, JSON.stringify(startState(kind)), me.id, now, now).run();
+      const g = { id: r.meta.last_row_id, kind, p1: me.id, p2: opp };
+      await tell(g, 'invite');
+      await notify(env, { userId: opp, kind: 'game', title: '🎮 ' + me.name + ' ชวนเล่น ' + KN(kind), body: 'เปิดแอปแล้วไปที่ เกมดวลเพื่อน เพื่อตอบรับ', ref: String(g.id) }).catch(() => {});
+      await pushTo(env, [opp]).catch(() => {});
+      return json({ ok: true, id: g.id });
+    }
+    if (id && seg[2] && !seg[3] && m === 'GET') {
+      const g = await db.prepare(SEL + ' WHERE g.id = ?').bind(id).first();
+      if (!g || (g.p1 !== me.id && g.p2 !== me.id)) return fail(404, 'ไม่พบเกมนี้ (อาจหมดอายุแล้ว)');
+      return json(view(g));
+    }
+    if (id && seg[2] && seg[3] && m === 'POST') {
+      const g = await db.prepare(SEL + ' WHERE g.id = ?').bind(id).first();
+      if (!g || (g.p1 !== me.id && g.p2 !== me.id)) return fail(404, 'ไม่พบเกมนี้ (อาจหมดอายุแล้ว)');
+      const now = Date.now(), side = g.p1 === me.id ? 1 : 2;
+      if (seg[3] === 'accept' || seg[3] === 'decline') {
+        if (g.status !== 'invited' || g.p2 !== me.id) return fail(409, 'ตอบคำชวนนี้ไม่ได้แล้ว');
+        const ok = seg[3] === 'accept';
+        await db.prepare('UPDATE games SET status = ?, updated = ? WHERE id = ?').bind(ok ? 'playing' : 'declined', now, id).run();
+        await tell(g, ok ? 'accept' : 'decline');
+        return json({ ok: true });
+      }
+      if (seg[3] === 'cancel') {                                   // the inviter withdraws, or either side leaves before it starts
+        if (g.status === 'done' || g.status === 'declined') return json({ ok: true });
+        await db.prepare('DELETE FROM games WHERE id = ?').bind(id).run();
+        await tell(g, 'cancel');
+        return json({ ok: true });
+      }
+      if (g.status !== 'playing') return fail(409, 'เกมนี้ไม่ได้กำลังเล่นอยู่');
+      if (seg[3] === 'resign') {
+        const win = side === 1 ? g.p2 : g.p1;
+        await db.prepare("UPDATE games SET status = 'done', winner = ?, result = 'resign', turn = NULL, updated = ? WHERE id = ?").bind(win, now, id).run();
+        await tell(g, 'resign');
+        return json({ ok: true });
+      }
+      if (seg[3] === 'move') {
+        if (g.turn !== me.id) return fail(409, 'ยังไม่ถึงตาคุณ');
+        const out = applyMove(g.kind, JSON.parse(g.state), side, await readJson(req));
+        if (out.error) return fail(400, out.error);
+        if (out.end) {
+          const win = out.end.winner === 0 ? null : out.end.winner === 1 ? g.p1 : g.p2;
+          await db.prepare("UPDATE games SET status = 'done', state = ?, winner = ?, result = ?, turn = NULL, updated = ? WHERE id = ?").bind(JSON.stringify(out.state), win, win ? 'win' : 'draw', now, id).run();
+        } else {
+          await db.prepare('UPDATE games SET state = ?, turn = ?, updated = ? WHERE id = ?').bind(JSON.stringify(out.state), side === 1 ? g.p2 : g.p1, now, id).run();
+        }
+        await tell(g, out.end ? 'end' : 'move');
+        if (!out.end) await pushTo(env, [side === 1 ? g.p2 : g.p1]).catch(() => {});
+        return json({ ok: true });
+      }
+    }
+    return fail(404, 'ไม่พบ');
+  }
   if (p === '/api/dm' && m === 'GET') {          // my private conversations, newest first
     const { results } = await db.prepare(
       `SELECT m.channel, m.kind, m.name, m.text, m.ms, m.ts, m.user_id FROM messages m

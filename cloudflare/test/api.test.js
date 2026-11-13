@@ -580,6 +580,64 @@ test('แจ้งเตือนเด้งตอนปิดแอป: เค
   assert.equal((await call('GET', '/api/push/latest', T['แชทC'])).body.kind === 'voice', false, 'คนอื่นไม่เห็น');
 });
 
+
+test('เกมดวล XO: ชวน → ตอบรับ → ผลัดกันเดิน → ชนะ · เดินผิดตา/ซ้ำช่องไม่ได้', async () => {
+  const idOf = async tk => (await call('GET', '/api/me', tk)).body.user.id;
+  const ib = await idOf(T['แชทB']);
+  const c = await call('POST', '/api/games', T['แชทA'], { kind: 'xo', opponent: ib });
+  assert.equal(c.status, 200); const g = '/api/games/' + c.body.id;
+  assert.equal((await call('POST', '/api/games', T['แชทA'], { kind: 'xo', opponent: ib })).body.existing, true, 'ชวนซ้ำ = ใช้เกมเดิม');
+  assert.equal((await call('POST', g + '/move', T['แชทA'], { cell: 0 })).status, 409, 'ยังไม่ตอบรับ เดินไม่ได้');
+  assert.equal((await call('POST', g + '/accept', T['แชทA'])).status, 409, 'คนชวนตอบรับเองไม่ได้');
+  assert.equal((await call('POST', g + '/accept', T['แชทB'])).status, 200);
+  assert.equal((await call('POST', g + '/move', T['แชทB'], { cell: 0 })).status, 409, 'ไม่ใช่ตาของ B');
+  assert.equal((await call('POST', g + '/move', T['แชทC'], { cell: 0 })).status, 404, 'คนนอกเกมเข้าไม่ได้');
+  await call('POST', g + '/move', T['แชทA'], { cell: 0 });
+  assert.equal((await call('POST', g + '/move', T['แชทB'], { cell: 0 })).status, 400, 'ช่องซ้ำ');
+  await call('POST', g + '/move', T['แชทB'], { cell: 3 });
+  await call('POST', g + '/move', T['แชทA'], { cell: 1 });
+  await call('POST', g + '/move', T['แชทB'], { cell: 4 });
+  await call('POST', g + '/move', T['แชทA'], { cell: 2 });
+  const end = (await call('GET', g, T['แชทA'])).body;
+  assert.equal(end.status, 'done'); assert.equal(end.winner, end.p1); assert.deepEqual(end.state.line, [0, 1, 2]);
+  assert.equal((await call('POST', g + '/move', T['แชทB'], { cell: 5 })).status, 409, 'จบแล้วเดินไม่ได้');
+});
+test('เกมดวลหมากฮอส: เริ่มเกม · เดินได้เฉพาะที่ถูกกติกา · บังคับกิน · ยอมแพ้', async () => {
+  const idOf = async tk => (await call('GET', '/api/me', tk)).body.user.id;
+  const ib = await idOf(T['แชทB']);
+  const c = await call('POST', '/api/games', T['แชทA'], { kind: 'checkers', opponent: ib }); const g = '/api/games/' + c.body.id;
+  await call('POST', g + '/accept', T['แชทB']);
+  const a = (await call('GET', g, T['แชทA'])).body;
+  assert.equal(a.legal.length, 8 * 0 + a.legal.length); assert.ok(a.legal.length > 0, 'มีทางเดิน');
+  assert.equal((await call('GET', g, T['แชทB'])).body.legal.length, 0, 'ไม่ใช่ตา B ไม่มีทางเดิน');
+  assert.equal((await call('POST', g + '/move', T['แชทA'], { path: [[0, 0], [5, 5]] })).status, 400, 'เดินมั่ว');
+  assert.equal((await call('POST', g + '/move', T['แชทA'], { path: a.legal[0] })).status, 200);
+  const b = (await call('GET', g, T['แชทB'])).body; assert.equal(b.turn, b.p2);
+  assert.equal((await call('POST', g + '/resign', T['แชทB'])).status, 200);
+  const e = (await call('GET', g, T['แชทA'])).body; assert.equal(e.status, 'done'); assert.equal(e.winner, e.p1); assert.equal(e.result, 'resign');
+});
+test('กติกาหมากฮอสสากล (ตรรกะ): บังคับกิน · กินถอยหลังได้ · กินมากที่สุด · โคนบินกิน · จบตาที่แถวสุดท้ายเป็นโคน', async () => {
+  const G = await import(require('url').pathToFileURL(require('path').join(__dirname, '..', 'src', 'games.js')).href);
+  const empty = () => Array.from({ length: 10 }, () => Array(10).fill(''));
+  const st = G.checkersStart();
+  assert.equal(st.b.flat().filter(x => x === 'a').length, 20); assert.equal(st.b.flat().filter(x => x === 'b').length, 20);
+  assert.equal(G.legalMoves(st.b, 1).length, 9, 'เริ่มเกม: ฝั่งล่างเดินได้ 9 ทาง');
+  let b = empty(); b[5][2] = 'a'; b[4][3] = 'b'; b[9][0] = 'a';
+  assert.ok(G.legalMoves(b, 1).every(m => m.caps.length), 'ต้องกินเท่านั้น');
+  b = empty(); b[3][3] = 'a'; b[4][4] = 'b'; b[0][1] = 'b';                      // ลูกธรรมดากินถอยหลังได้
+  assert.ok(G.legalMoves(b, 1).some(m => m.caps.length === 1 && m.path[1][0] === 5), 'กินถอยหลัง');
+  b = empty(); b[9][0] = 'a'; b[8][1] = 'b'; b[6][3] = 'b'; b[0][7] = 'b';       // กินสองตัวต่อเนื่อง
+  let mv = G.legalMoves(b, 1); assert.deepEqual(mv[0].path, [[9, 0], [7, 2], [5, 4]]); assert.equal(mv[0].caps.length, 2);
+  b = empty(); b[9][4] = 'a'; b[8][3] = 'b'; b[6][1] = 'b'; b[8][5] = 'b'; b[0][1] = 'b';   // มีทางกิน 1 ตัว (ขวา) กับ 2 ตัว (ซ้าย) → ต้องเลือก 2 ตัว
+  mv = G.legalMoves(b, 1); assert.ok(mv.length >= 1 && mv.every(m => m.caps.length === 2), 'ต้องเลือกทางที่กินมากที่สุด');
+  b = empty(); b[9][0] = 'A'; b[6][3] = 'b'; b[0][1] = 'b';                      // โคนบินกินข้ามระยะไกล
+  mv = G.legalMoves(b, 1); assert.ok(mv.length >= 3 && mv.every(m => m.caps.length === 1), 'โคนบินกิน');
+  b = empty(); b[1][2] = 'a'; b[0][9] = 'b';                                      // จบตาที่แถวสุดท้าย = โคน
+  assert.equal(G.applyMove('checkers', { b, q: 0 }, 1, { path: [[1, 2], [0, 1]] }).state.b[0][1], 'A');
+  b = empty(); b[5][2] = 'a'; b[4][3] = 'b';                                      // กินตัวสุดท้าย = ชนะ
+  assert.deepEqual(G.applyMove('checkers', { b, q: 0 }, 1, { path: [[5, 2], [3, 4]] }).end, { winner: 1 });
+});
+
 (async () => {
   let fail = 0;
   for (const [n, f] of tests) {

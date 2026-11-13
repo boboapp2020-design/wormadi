@@ -462,6 +462,17 @@ function onMessage(m) {
     case 'chat': addChatMsg(m.msg); break;
     case 'notify': addMsgAlert(m.msg); break;
     case 'react': S.chat.reactions[m.id] = m.by; const el = $('r-' + m.id); if (el) el.innerHTML = reactsHtml(m.id); break;
+    case 'game': {
+      const here = S.route === 'game' && Number(S.params.id) === m.id;
+      if (here && S.gameReload) S.gameReload(m.id); else if (S.route === 'games') render();
+      if (!S.user || m.to !== S.user.id) break;                           // I made this move myself (other screen)
+      if (m.ev === 'invite') { vibrate([100, 60, 100]); if (!NATIVE) beep(740, 0.08); if (document.hidden) systemNotify('🎮 ' + m.by + ' ชวนเล่นเกม', GN[m.kind] || '', 'game'); gameInviteDialog(m); }
+      else if (!here) {
+        const t = { accept: '🎮 ' + m.by + ' ตอบรับแล้ว เริ่มเล่นได้', decline: m.by + ' ไม่รับคำชวนเล่นเกม', move: '🎮 ถึงตาคุณแล้ว · ' + m.by, end: '🎮 เกมจบแล้ว · ' + m.by, resign: '🎮 ' + m.by + ' ยอมแพ้ · คุณชนะ', cancel: m.by + ' ยกเลิกคำชวน' }[m.ev];
+        if (t) { vibrate([80]); toast(t); if (document.hidden) systemNotify(t, GN[m.kind] || '', 'game'); }
+      }
+      break;
+    }
     case 'incident':
       if (S.user && m.name === S.user.name) break;
       S.incNew = (S.incNew || 0) + 1;
@@ -1631,18 +1642,131 @@ function userSheet(u) {
     <div style="color:${u.online ? 'var(--ok-fg)' : 'var(--muted)'};margin-top:4px"><span class="dot ${u.online ? 'on' : ''}"></span> ${u.online ? 'ออนไลน์' + (u.channel ? ' · ' + esc(u.channel) : '') : 'ออฟไลน์'}</div></div>
     <div class="list kv kv2">${kv('building', 'แผนก', u.dept)}${kv('brief', 'ตำแหน่ง', u.position)}${kv('antenna', 'ช่องหลัก', u.main_channel_name)}${kv('shield', 'สิทธิ์การใช้งาน', ROLE_NAME[u.role])}</div>
     ${u.online && S.user && u.id !== S.user.id ? `<button class="btn primary" id="callU">${icon('walkie')}วอหาส่วนตัว</button>` : ''}
-    ${S.user && u.id !== S.user.id ? `<div class="btnrow"><button class="btn" id="dmU">${icon('chat')}แชทส่วนตัว</button><button class="btn" id="invU">${icon('plus')}เชิญเข้ากลุ่ม</button></div>` : ''}
+    ${S.user && u.id !== S.user.id ? `<div class="btnrow"><button class="btn" id="dmU">${icon('chat')}แชทส่วนตัว</button><button class="btn" id="invU">${icon('plus')}เชิญเข้ากลุ่ม</button></div><button class="btn" id="gameU" type="button">${icon('game')}ชวนเล่นเกม</button>` : ''}
     ${u.online && u.channel && u.channel !== 'คุยส่วนตัว' ? `<button class="btn" id="joinU" style="margin-top:10px">${icon('mic')}ไปห้อง ${esc(u.channel)}</button>` : ''}
     ${!u.online && S.user && u.id !== S.user.id ? `<button class="btn primary" id="vmU" style="margin-top:10px">${icon('mic')}ฝากข้อความเสียง</button><p class="small muted" style="text-align:center">ไม่ได้ออนไลน์ · ฝากเสียงไว้ เขาจะได้รับแจ้งเมื่อกลับมาออนไลน์</p>` : ''}</div>`, bg => {
     const vm = bg.querySelector('#vmU'); if (vm) vm.onclick = () => voiceMsgSheet(u);
     const j = bg.querySelector('#joinU'); if (j) j.onclick = () => { closeSheet(); enterRoom(u.channel, 'ptt'); };
     const cu = bg.querySelector('#callU'); if (cu) cu.onclick = () => { closeSheet(); startCall(u); };
+    const gm = bg.querySelector('#gameU'); if (gm) gm.onclick = () => gamePickSheet(u);
     const iv = bg.querySelector('#invU'); if (iv) iv.onclick = () => inviteSheet(u);
     const dmb = bg.querySelector('#dmU'); if (dmb) dmb.onclick = () => { closeSheet(); S.dmPeers[u.id] = u; go('dm', { u: u.id }); };
     const av = bg.querySelector('.prof .av'); if (av) { av.style.width = '72px'; av.style.height = '72px'; av.style.margin = '0 auto'; }
   });
 }
 const kv = (ic, k, v) => `<div class="li">${`<span class="ic">${icon(ic)}</span>`}<div class="grow"><div class="t1">${k}</div><div class="t2">${esc(v || '-')}</div></div></div>`;
+
+// ---------------------------------------------------------------- duel games (XO / หมากฮอสสากล): invite from a friend's profile, they must accept
+const GN = { xo: 'XO', checkers: 'หมากฮอส' };
+function gamePickSheet(u) {
+  sheet(`<h3>ชวน ${esc(u.name)} เล่นเกม</h3><p class="small muted" style="margin:0 0 10px">เพื่อนต้องกดตอบรับก่อน ถึงจะเริ่มเล่นได้</p>
+    <button class="btn" id="gXo" type="button" style="margin-top:8px"><b style="font-size:22px;margin-right:6px">✕ ○</b> XO · 3×3</button>
+    <button class="btn" id="gCk" type="button" style="margin-top:10px">${icon('game')}หมากฮอสสากล · 10×10</button>`, bg => {
+    const go1 = kind => async () => {
+      closeSheet();
+      try {
+        const r = await api('/api/games', { method: 'POST', body: { kind, opponent: u.id } });
+        toast(r.existing ? 'มีเกมนี้กับเพื่อนอยู่แล้ว' : `ส่งคำชวนเล่น ${GN[kind]} แล้ว รอเพื่อนตอบรับ`);
+        go('game', { id: r.id });
+      } catch (e) { toast(e.message); }
+    };
+    bg.querySelector('#gXo').onclick = go1('xo'); bg.querySelector('#gCk').onclick = go1('checkers');
+  });
+}
+async function gameInviteDialog(m) {
+  const ok = await ask(`${m.by} ชวนคุณเล่น ${GN[m.kind] || 'เกม'}\nตอบรับแล้วจะเริ่มเล่นทันที`, { title: 'ชวนเล่นเกม', yes: 'ตอบรับ', no: 'ไว้ก่อน', icon: 'game' });
+  if (!ok) return;
+  try { await api(`/api/games/${m.id}/accept`, { method: 'POST', body: {} }); go('game', { id: m.id }); } catch (e) { toast(e.message); }
+}
+ROUTES.games = async () => {
+  mount(`<div class="page">${header('เกมดวลเพื่อน')}<div class="scroll"><div id="gl"><div class="empty">กำลังโหลด…</div></div>
+    <p class="small muted" style="padding:6px 20px 24px;text-align:center">อยากชวนเพื่อนเล่น: เข้า <b>สมาชิกทีมงาน</b> → แตะชื่อเพื่อน → <b>ชวนเล่นเกม</b></p></div></div>`, root => bindBack(root, 'settings'));
+  let list = [];
+  try { list = await api('/api/games'); } catch (e) { if ($('gl')) $('gl').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!$('gl')) return;
+  const me = S.user || {};
+  const row = g => {
+    const opp = g.p1 === me.id ? g.n2 : g.n1, mine = g.turn === me.id;
+    const st = g.status === 'invited' ? (g.p2 === me.id ? 'ชวนคุณเล่น · แตะเพื่อตอบ' : 'รอเพื่อนตอบรับ')
+      : g.status === 'playing' ? (mine ? 'ถึงตาคุณ' : 'รอเพื่อนเดิน')
+      : g.winner == null ? 'เสมอ' : g.winner === me.id ? 'คุณชนะ' : 'คุณแพ้';
+    const hot = (g.status === 'invited' && g.p2 === me.id) || (g.status === 'playing' && mine);
+    return `<button class="li" data-g="${g.id}"><span class="ic">${icon('game')}</span><div class="grow"><div class="t1">${GN[g.kind]} · ${esc(opp)}</div><div class="t2">${st}</div></div>${hot ? '<span class="pill new">!</span>' : icon('chev')}</button>`;
+  };
+  const part = (t, a) => (a.length ? `<div class="sec" style="padding:10px 18px 4px">${t}</div><div class="list">${a.map(row).join('')}</div>` : '');
+  const inv = list.filter(g => g.status === 'invited' && g.p2 === me.id), play = list.filter(g => g.status === 'playing' || (g.status === 'invited' && g.p1 === me.id)), done = list.filter(g => g.status === 'done');
+  $('gl').innerHTML = part('คำชวนถึงคุณ', inv) + part('กำลังเล่น', play) + part('จบแล้ว (เก็บ 24 ชั่วโมง)', done) || '';
+  if (!list.length) $('gl').innerHTML = '<div class="empty">ยังไม่มีเกม<br>ชวนเพื่อนเล่น XO หรือหมากฮอสได้เลย</div>';
+  for (const b of $$('[data-g]', $('gl'))) b.onclick = () => go('game', { id: b.dataset.g });
+};
+ROUTES.game = async p => {
+  const gid = Number(p.id), me = S.user || {};
+  let g = null, sel = null, busy = false;
+  mount(`<div class="page">${header('<span id="gTitle">เกม</span>')}<div class="scroll" id="gBody"><div class="empty">กำลังโหลด…</div></div></div>`, root => bindBack(root, 'games'));
+  const act = async (a, body) => {
+    if (busy) return; busy = true;
+    try { await api(`/api/games/${gid}/${a}`, { method: 'POST', body: body || {} }); } catch (e) { toast(e.message); }
+    busy = false; sel = null; await load();
+  };
+  const opp = () => (g.p1 === me.id ? g.n2 : g.n1);
+  const draw = () => {
+    if (!$('gBody')) return;
+    $('gTitle').textContent = `${GN[g.kind]} · ${opp()}`;
+    const myTurn = g.status === 'playing' && g.turn === me.id;
+    let banner = '', btns = '', board = '';
+    if (g.status === 'invited') {
+      if (g.p2 === me.id) { banner = `<b>${esc(g.n1)}</b> ชวนคุณเล่น ${GN[g.kind]}`; btns = '<button class="btn" id="gNo" type="button">ปฏิเสธ</button><button class="btn primary" id="gYes" type="button">ตอบรับ</button>'; }
+      else { banner = `รอ <b>${esc(g.n2)}</b> ตอบรับ…`; btns = '<button class="btn" id="gCancel" type="button">ยกเลิกคำชวน</button>'; }
+    } else if (g.status === 'declined') { banner = 'เพื่อนไม่รับคำชวน'; }
+    else if (g.status === 'done') {
+      banner = g.winner == null ? '🤝 เสมอ' : g.winner === me.id ? '🏆 คุณชนะ!' : `${esc(opp())} ชนะ`;
+      if (g.result === 'resign') banner += `<small>${g.winner === me.id ? 'เพื่อนยอมแพ้' : 'คุณยอมแพ้'}</small>`;
+      btns = '<button class="btn primary" id="gAgain" type="button">เล่นอีกรอบ</button>';
+    } else {
+      banner = myTurn ? '<b>ตาคุณ</b>' : `รอ <b>${esc(opp())}</b> เดิน…`;
+      btns = '<button class="btn" id="gResign" type="button">ยอมแพ้</button>';
+    }
+    if (g.status === 'playing' || g.status === 'done') board = g.kind === 'xo' ? xoBoard(myTurn) : checkersBoard(myTurn);
+    const mark = g.kind === 'xo' ? `<span class="gp x">✕ ${esc(g.n1)}</span><span class="gp o">○ ${esc(g.n2)}</span>` : `<span class="gp w">⚪ ${esc(g.n1)}</span><span class="gp k">⚫ ${esc(g.n2)}</span>`;
+    $('gBody').innerHTML = `<div class="gwrap"><div class="gban ${myTurn ? 'mine' : ''}">${banner}</div>${g.status === 'playing' || g.status === 'done' ? `<div class="gplayers">${mark}</div>` : ''}${board}
+      ${g.kind === 'checkers' && g.status === 'playing' ? '<p class="small muted gnote">กติกาสากล: ต้องกินเสมอ และต้องเลือกทางที่กินได้มากที่สุด · ลูกธรรมดากินถอยหลังได้ · ถึงแถวสุดท้ายเป็นโคน บินได้ไกล</p>' : ''}
+      <div class="gbtns">${btns}</div></div>`;
+    const on = (id, f) => { const e = $(id); if (e) e.onclick = f; };
+    on('gYes', () => act('accept')); on('gNo', () => act('decline')); on('gCancel', async () => { await act('cancel'); go('games', {}, true); });
+    on('gResign', async () => { if (await ask('ยอมแพ้เกมนี้?', { title: 'ยอมแพ้', yes: 'ยอมแพ้', danger: true })) act('resign'); });
+    on('gAgain', async () => {
+      try { const r = await api('/api/games', { method: 'POST', body: { kind: g.kind, opponent: g.p1 === me.id ? g.p2 : g.p1 } }); go('game', { id: r.id }, true); toast('ส่งคำชวนเล่นอีกรอบแล้ว'); } catch (e) { toast(e.message); }
+    });
+    for (const c of $$('[data-cell]', $('gBody'))) c.onclick = () => act('move', { cell: Number(c.dataset.cell) });
+    for (const c of $$('[data-sq]', $('gBody'))) c.onclick = () => tapSquare(c.dataset.sq.split(',').map(Number));
+  };
+  const xoBoard = myTurn => `<div class="xo">${g.state.b.map((v, i) => `<button type="button" class="xc ${v === 'X' ? 'x' : v === 'O' ? 'o' : ''} ${g.state.line && g.state.line.includes(i) ? 'win' : ''}" ${myTurn && !v ? `data-cell="${i}"` : 'disabled'} aria-label="ช่อง ${i + 1}">${v === 'X' ? '✕' : v === 'O' ? '○' : ''}</button>`).join('')}</div>`;
+  const checkersBoard = myTurn => {
+    const flip = g.side === 2, b = g.state.b, N = b.length;
+    const starts = myTurn ? g.legal.map(p => p[0].join()) : [];
+    const dests = sel ? g.legal.filter(p => p[0].join() === sel.join()).map(p => p[p.length - 1].join()) : [];
+    const last = g.state.last ? [g.state.last[0].join(), g.state.last[g.state.last.length - 1].join()] : [];
+    let h = '<div class="ckb">';
+    for (let ri = 0; ri < N; ri++) for (let ci = 0; ci < N; ci++) {
+      const r = flip ? N - 1 - ri : ri, c = flip ? N - 1 - ci : ci, v = b[r][c], k = `${r},${c}`, dark = (r + c) % 2 === 1;
+      const pc = v ? `<i class="pc ${v.toLowerCase() === 'a' ? 'w' : 'k'} ${v === 'A' || v === 'B' ? 'king' : ''} ${sel && sel.join() === k ? 'sel' : ''} ${starts.includes(k) ? 'can' : ''}">${v === 'A' || v === 'B' ? '♛' : ''}</i>` : '';
+      h += `<div class="sq ${dark ? 'dk' : 'lt'} ${dests.includes(k) ? 'dest' : ''} ${last.includes(k) ? 'last' : ''}" ${dark && myTurn ? `data-sq="${k}"` : ''}>${pc}</div>`;
+    }
+    return h + '</div>';
+  };
+  const tapSquare = sq => {
+    const k = sq.join();
+    if (g.legal.some(p => p[0].join() === k)) { sel = sq; return draw(); }
+    if (sel) { const p = g.legal.find(p => p[0].join() === sel.join() && p[p.length - 1].join() === k); if (p) return act('move', { path: p }); }
+    sel = null; draw();
+  };
+  const load = async () => {
+    try { g = await api(`/api/games/${gid}`); } catch (e) { if ($('gBody')) $('gBody').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    if (S.route === 'game') draw();
+  };
+  S.gameReload = id => { if (id === gid) load(); };
+  await load();
+};
 
 // ---------------------------------------------------------------- 08 history
 ROUTES.history = async p => {
@@ -2177,7 +2301,7 @@ ROUTES.notifications = async p => {
   for (const b of $$('[data-i]', $('nl'))) b.onclick = () => {
     const n = items[Number(b.dataset.i)];
     if (n.ch) openChatFor(n.ch); else if (n.kind === 'sos') go('sos'); else if (n.kind === 'task') go('tasks');
-    else if (n.kind === 'reminder') go('tasks');
+    else if (n.kind === 'reminder') go('tasks'); else if (n.kind === 'game') go('games');
     else if (n.kind === 'dm' && String(n.ref || '').startsWith('dm:')) go('dm', { u: String(n.ref).slice(3) });
     else if (n.kind === 'invite' && String(n.ref || '').startsWith('room:')) answerInvite(String(n.ref).slice(5), { name: String(n.title || '').split(' เชิญ')[0] });
   };
@@ -2306,6 +2430,7 @@ ROUTES.settings = () => {
     </div>
     <div class="list">
       ${!NATIVE && /Android/i.test(navigator.userAgent) ? row('sApk', 'download', 'ดาวน์โหลดแอป Android', 'ได้ยินเสียงวอแม้ปัดปิดแอป') : ''}
+      ${row('sGames', 'game', 'เกมดวลเพื่อน', 'XO / หมากฮอส ชวนเพื่อนเล่นแก้เบื่อ')}
       ${row('sNotes', 'task', 'บันทึก / เตือน', 'จดบันทึกส่วนตัว ตั้งเวลาให้เครื่องเตือน')}
       ${row('sCodes', 'radio', 'รหัสวิทยุ (ว.)', 'คำที่ใช้วอหากัน เช่น ว.2 = ได้ยินไหม')}
       ${row('sHelp', 'help', 'วิธีใช้')}
@@ -2323,7 +2448,7 @@ ROUTES.settings = () => {
     on('sReport', () => go('report')); on('sLog', () => { location.href = (serverBase || '') + '/log.html'; }); on('sAdmin', () => go('admin'));
     on('sApk', () => { location.href = APK_URL; });
     const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); toast(k.checked ? 'ได้ยินตลอดเวลา: เปิด' : 'ได้ยินตลอดเวลา: ปิด (เหตุฉุกเฉินยังดังตามปกติ)'); };
-    on('sNotes', () => go('tasks')); on('sCodes', radioCodes); on('sHelp', help); on('sAbout', about);
+    on('sGames', () => go('games')); on('sNotes', () => go('tasks')); on('sCodes', radioCodes); on('sHelp', help); on('sAbout', about);
     on('sOut', async () => { if (await ask('ออกจากระบบ?', { title: 'ออกจากระบบ', yes: 'ออกจากระบบ' })) signOut(); });
     const w = $('optWake'); if (w) w.onchange = () => { lsSet('walkie_wake', w.checked ? '1' : '0'); setWake(w.checked); };
     const pb = $('sPush'); if (pb) pb.onclick = async () => { await enablePush(true); render(); };
