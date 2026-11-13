@@ -468,3 +468,9 @@ select.sel-sm { min-height:40px; padding:6px 34px 6px 12px; border-radius:10px; 
 .airbar svg.i { width:22px; height:22px; flex:none; }
 .airbar small { display:block; font-size:13px; opacity:.9; }
 @keyframes airIn { from { opacity:0; } }
+
+/* radio codes (ว.) list */
+.rclist { max-height:56vh; overflow:auto; border:var(--line-w) solid var(--line-soft); border-radius:14px; background:var(--panel); }
+.rc { display:flex; gap:14px; align-items:baseline; padding:11px 14px; border-bottom:1px solid var(--line-soft); font-size:16px; }
+.rc:last-child { border-bottom:0; }
+.rc b { min-width:62px; color:var(--primary-fg); font-size:17px; }

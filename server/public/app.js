@@ -1968,6 +1968,7 @@ ROUTES.settings = () => {
     </div>
     <div class="list">
       ${!NATIVE && /Android/i.test(navigator.userAgent) ? row('sApk', 'download', 'ดาวน์โหลดแอป Android', 'ได้ยินเสียงวอแม้ปัดปิดแอป') : ''}
+      ${row('sCodes', 'radio', 'รหัสวิทยุ (ว.)', 'คำที่ใช้วอหากัน เช่น ว.2 = ได้ยินไหม')}
       ${row('sHelp', 'help', 'วิธีใช้')}
       ${row('sAbout', 'info', 'เกี่ยวกับแอป')}
       <button class="setrow" id="sOut" style="width:100%;background:none;border:0;text-align:left;color:var(--err-fg)">${icon('logout', 'i lead')}<div class="grow"><b>ออกจากระบบ</b></div></button>
@@ -1982,12 +1983,35 @@ ROUTES.settings = () => {
     on('sInvite', invite); on('sMembers', () => ACC() ? go('members') : toast('ใช้ได้เมื่อใช้เซิร์ฟเวอร์ Cloudflare'));
     on('sReport', () => go('report')); on('sLog', () => { location.href = (serverBase || '') + '/log.html'; }); on('sAdmin', () => go('admin'));
     on('sApk', () => { location.href = APK_URL; });
-    on('sHelp', help); on('sAbout', about);
+    on('sCodes', radioCodes); on('sHelp', help); on('sAbout', about);
     on('sOut', () => { if (confirm('ออกจากระบบ?')) signOut(); });
     const w = $('optWake'); if (w) w.onchange = () => { lsSet('walkie_wake', w.checked ? '1' : '0'); setWake(w.checked); };
     const pb = $('sPush'); if (pb) pb.onclick = async () => { await enablePush(true); render(); };
   });
 };
+// ---------------------------------------------------------------- radio codes (ว.) used when talking
+const RADIO_CODES = [
+  ['ว.0', 'คำสั่ง'], ['ว.00', 'รอก่อน / คอยก่อน'], ['ว.01', 'ที่ทำงาน'], ['ว.02', 'บ้าน / ที่พัก'],
+  ['ว.1', 'อยู่ที่ไหน'], ['ว.2', 'ได้ยินไหม / ได้ยินแล้ว'], ['ว.3', 'ทวนข้อความอีกครั้ง (ได้ยินไม่ชัด)'], ['ว.4', 'ปฏิบัติหน้าที่ / ดำเนินการ'],
+  ['ว.5', 'เรื่องลับ'], ['ว.6', 'ขอติดต่อด้วย / พูดโดยตรง'], ['ว.7', 'ขอความช่วยเหลือ'], ['ว.8', 'ข่าวสาร / ข้อความ'],
+  ['ว.9', 'มีเหตุฉุกเฉิน'], ['ว.10', 'อยู่ประจำที่'], ['ว.11', 'พัก (ยังติดต่อทางวิทยุได้)'], ['ว.12', 'พัก (ติดต่อทางวิทยุไม่ได้)'],
+  ['ว.13', 'ติดต่อทางโทรศัพท์'], ['ว.14', 'เลิกงาน'], ['ว.15', 'ให้มาพบ / ไปพบ'], ['ว.16', 'ทดสอบสัญญาณ'],
+  ['ว.16-1', 'จับใจความไม่ได้ / รบกวนมาก'], ['ว.16-2', 'เสียงไม่ชัด'], ['ว.16-3', 'พอฟังได้'], ['ว.16-4', 'ชัดเจนดี'], ['ว.16-5', 'ชัดเจนดีมาก'],
+  ['ว.17', 'มีอันตราย ห้ามผ่าน'], ['ว.18', 'รถเสีย'], ['ว.19', 'อยู่ในภาวะคับขัน'], ['ว.20', 'ตรวจค้น / จับกุม'],
+  ['ว.21', 'ออกจาก (สถานที่)'], ['ว.22', 'ถึง (สถานที่)'], ['ว.23', 'ผ่าน (สถานที่)'], ['ว.24', 'แจ้งเวลา / ขอทราบเวลา'],
+  ['ว.25', 'ที่หมาย / ไป'], ['ว.26', 'ใช้วิทยุให้น้อยที่สุด'], ['ว.28', 'ประชุม'], ['ว.29', 'มีธุระ'],
+  ['ว.30', 'ขอทราบจำนวน'], ['ว.35', 'เตรียมพร้อม'], ['ว.39', 'รถติด'], ['ว.40', 'อุบัติเหตุรถชน'],
+];
+function radioCodes() {
+  const list = q => RADIO_CODES.filter(([c, t]) => !q || c.replace(/s/g, '').includes(q.replace(/[s.]/g, '').replace(/^ว?/, 'ว.')) || t.includes(q))
+    .map(([c, t]) => `<div class="rc"><b>${c}</b><span>${t}</span></div>`).join('') || '<div class="empty">ไม่พบ</div>';
+  sheet(`<h3>รหัสวิทยุ (ว.)</h3>
+    <div class="field plain" style="margin-bottom:10px"><input id="rcq" type="search" placeholder="ค้นหา เช่น 2 หรือ ได้ยิน" autocomplete="off"></div>
+    <div class="rclist" id="rcl">${list('')}</div>
+    <p class="small muted" style="margin:10px 0 0">ตัวอย่าง: “ว.2 ครับ” = ได้ยินไหม · ตอบ “ว.2” = ได้ยินแล้ว</p>`, () => {
+    const q = $('rcq'); q.oninput = () => { $('rcl').innerHTML = list(q.value.trim()); };
+  });
+}
 function help() {
   const step = (ic, title, text) => `<li><span class="gi">${icon(ic)}</span><div><b>${title}</b><br>${text}</div></li>`;
   sheet(`<h3>วิธีใช้</h3><ol class="guide">
