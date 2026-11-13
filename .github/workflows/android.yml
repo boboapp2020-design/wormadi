@@ -24,8 +24,7 @@ jobs:
     steps:
       - name: Which signing secrets are set (yes/no only)
         run: |
-          echo "ANDROID_KEYSTORE_B64 set: $([ -n "$KS_B64" ] && echo yes || echo no) (length ${#KS_B64})"
-          echo "ANDROID_KEYSTORE_PASSWORD set: $([ -n "$WORMADI_KEYSTORE_PASSWORD" ] && echo yes || echo no)"
+          echo "::notice::ANDROID_KEYSTORE_B64 set: $([ -n "$KS_B64" ] && echo yes || echo no) (length ${#KS_B64}) / ANDROID_KEYSTORE_PASSWORD set: $([ -n "$WORMADI_KEYSTORE_PASSWORD" ] && echo yes || echo no)"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
