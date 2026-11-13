@@ -735,7 +735,7 @@ function renderBadges() {
   set('navMsgBadge', msgs); set('bellBadge', n); set('taskBadge', S.incNew || 0); for (const t of $$('[data-to="incidents"]')) t.classList.toggle('hot', !!S.incHot); set('msgTileBadge', msgs);
   set('chatIbBadge', msgs); { const c = $('chatIb'); if (c) c.classList.toggle('hidden', !msgs); }
   try { if (navigator.setAppBadge) { msgs ? navigator.setAppBadge(msgs) : navigator.clearAppBadge(); } } catch {}
-  document.title = (msgs ? `(${msgs}) ` : '') + document.title.replace(/^(d+) /, '');
+  document.title = (msgs ? `(${msgs}) ` : '') + 'WORMADI';
 }
 const isMine = m => (m.user_id && S.user && m.user_id === S.user.id) || (m.uid && m.uid === S.uid) || (!m.uid && !m.user_id && S.me && m.name === S.me.name);
 function reactsHtml(id) {
