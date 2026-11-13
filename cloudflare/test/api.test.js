@@ -539,6 +539,31 @@ test('แชทกลุ่ม: คนเข้าทีหลังไม่เ
   a.close(); b.close();
 });
 
+test('ฝากข้อความเสียง: ส่งถึงคนออฟไลน์ -> อยู่ในแชทส่วนตัว + แจ้งเตือน + รายการยังไม่ฟัง -> ฟังแล้วหายจากรายการ · คนที่สามฟังไม่ได้', async () => {
+  const id = async tk => (await call('GET', '/api/me', tk)).body.user.id;
+  const [ia, ib] = [await id(T['แชทA']), await id(T['แชทB'])];
+  const pcm = Buffer.alloc(16000 * 2 * 2);                       // 2 s of 16 kHz
+  for (let k = 0; k < pcm.length / 2; k++) pcm.writeInt16LE(Math.round(Math.sin(k / 8) * 8000), k * 2);
+  const send = (to, body) => fetch(base + '/api/dm/' + to + '/voice?rate=16000', { method: 'POST', headers: { Authorization: 'Bearer ' + T['แชทA'], 'Content-Type': 'application/octet-stream' }, body });
+  assert.equal((await send(ib, Buffer.alloc(1000))).status, 400, 'สั้นเกินไป');
+  const r = await send(ib, pcm); const d = await r.json();
+  assert.equal(r.status, 200, JSON.stringify(d));
+  assert.equal(d.msg.kind, 'talk'); assert.ok(d.msg.ms >= 1900 && d.msg.ms <= 2100, 'ความยาว ' + d.msg.ms);
+  const vm = (await call('GET', '/api/voicemail', T['แชทB'])).body;
+  const v = vm.find(x => x.id === d.msg.id);
+  assert.ok(v, 'อยู่ในรายการยังไม่ฟัง'); assert.equal(v.from_id, ia); assert.equal(v.name, 'แชทA');
+  assert.ok(!(await call('GET', '/api/voicemail', T['แชทA'])).body.some(x => x.id === d.msg.id), 'คนส่งไม่มีในรายการของตัวเอง');
+  const wav = await call('GET', '/api/audio/' + d.msg.id, T['แชทB']);
+  assert.equal(wav.status, 200); assert.ok(wav.type.includes('audio/wav'));
+  assert.equal((await call('GET', '/api/audio/' + d.msg.id, T['แชทC'])).status, 403, 'คนที่สามฟังไม่ได้');
+  assert.ok((await call('GET', '/api/messages?channel=' + d.msg.channel, T['แชทB'])).body.msgs.some(x => x.id === d.msg.id), 'อยู่ในแชทส่วนตัว');
+  assert.ok(JSON.stringify((await call('GET', '/api/notifications', T['แชทB'])).body).includes('ข้อความเสียงจาก'), 'มีในการแจ้งเตือน');
+  assert.equal((await call('POST', '/api/voicemail/' + d.msg.id + '/heard', T['แชทC'])).status, 200);
+  assert.ok((await call('GET', '/api/voicemail', T['แชทB'])).body.some(x => x.id === d.msg.id), 'คนอื่นกดฟังแทนไม่ได้');
+  await call('POST', '/api/voicemail/' + d.msg.id + '/heard', T['แชทB']);
+  assert.ok(!(await call('GET', '/api/voicemail', T['แชทB'])).body.some(x => x.id === d.msg.id), 'ฟังแล้วหายจากรายการ');
+});
+
 (async () => {
   let fail = 0;
   for (const [n, f] of tests) {

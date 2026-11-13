@@ -67,6 +67,7 @@ async function netFetch(path, opts = {}) {
   }
 }
 let ws, talking = false, wantTalk = false, pressed = false, attempt = 0, reconnectTimer = null, pingTimer = null, stopped = true;
+let vmRec = null;                       // voice message being recorded: { chunks, t0 }
 let audioCtx, outGain, micStream, micSource, processor, rxRate = TARGET_RATE, playHead = 0;
 
 // ================================================================ theme
@@ -210,6 +211,7 @@ function render() {
   if (signedIn && ACC() && S.user && S.user.must_change && route !== 'setpw') return go('setpw', {}, true);
   S.route = route; S.params = Object.fromEntries(new URLSearchParams(q || ''));
   if (route === 'ptt') { const ab = document.getElementById('airBar'); if (ab) ab.remove(); }
+  const vmBack = !!$('vmPop') && !$('vmPop').dataset.played;
   closeSheet();
   $('view').innerHTML = '';
   ROUTES[route](S.params);
@@ -217,6 +219,7 @@ function render() {
   for (const b of $$('#nav button')) b.classList.toggle('on', b.dataset.go === route);
   loadAvatars($('view'));
   $('view').scrollTop = 0;
+  if (vmBack && S.vmPop) showVmPop();
 }
 for (const b of $$('#nav button')) b.onclick = () => go(b.dataset.go);
 function mount(html, bind) { $('view').innerHTML = html; bind && bind($('view')); loadAvatars($('view')); }
@@ -366,6 +369,7 @@ function onMessage(m) {
       if (changed) { S.chat.loadedFor = null; if (S.route === 'chat') renderChat(); }
       if (m.channel) markChannelRead(m.channel);
       if (S.route === 'ptt' || S.route === 'home') render();
+      if (!S.vmAsked && ACC() && S.user) { S.vmAsked = true; setTimeout(() => checkVoicemail(), 800); }
       if (!keepAudio && !NATIVE) setKeepAlive(true, true);          // keeps the page alive in the background (SOS)
       if (!NATIVE && wakeOn()) setWake(true);
       renderUnlock();
@@ -486,7 +490,7 @@ async function ensureMic() {
   processor = audioCtx.createScriptProcessor(2048, 1, 1);
   const ratio = audioCtx.sampleRate / TARGET_RATE;
   processor.onaudioprocess = e => {
-    if (!talking) return;
+    if (!talking && !vmRec) return;
     const input = e.inputBuffer.getChannelData(0);
     const outLen = Math.floor(input.length / ratio), pcm = new Int16Array(outLen);
     let peak = 0;
@@ -497,6 +501,7 @@ async function ensureMic() {
       peak = Math.max(peak, Math.abs(s)); pcm[i] = s * 0x7fff;
     }
     setMeter(peak);
+    if (vmRec) { vmRec.chunks.push(pcm); vmRec.peak = peak; return; }
     if (ws && ws.readyState === 1) ws.send(pcm.buffer);
   };
   const mute = audioCtx.createGain(); mute.gain.value = 0;
@@ -698,6 +703,7 @@ async function playRecording(btn) {
     audio.onended = done;
     player = { audio, btn, done };
     await audio.play();
+    markVmHeard(Number(id));
   } catch (e) { playIcon.innerHTML = icon('play'); toast('เล่นเสียงไม่ได้: ' + e.message); }
 }
 document.addEventListener('click', e => { const b = e.target.closest('[data-play]'); if (b) playRecording(b); });
@@ -1350,7 +1356,7 @@ ROUTES.dm = async p => {
       try { const r = await api(`/api/dm/${pid}`, { method: 'POST', body: { text: v } }); addDmMsg(r.msg); }
       catch (er) { $('dmIn').value = v; toast(er.message); }
     };
-    $('dmCall').onclick = () => { if (!peer.online) return toast('วอหาส่วนตัวได้เมื่ออีกฝ่ายออนไลน์อยู่'); startCall(peer); };
+    $('dmCall').onclick = () => { if (!peer.online) return voiceMsgSheet(peer); startCall(peer); };
   });
   S.dmOpen = ch; delete S.dmUnread[ch]; saveDmUnread();
   if (!peer.name || peer.online == null) { try { const u = (await api('/api/users')).find(x => x.id === pid); if (u) peer = S.dmPeers[pid] = u; } catch {} }
@@ -1374,11 +1380,13 @@ function incomingDm(m) {
   const msg = m.msg;
   if (m.mine || (S.user && msg.user_id === S.user.id)) { addDmMsg(msg); return; }     // my own message (other screen)
   S.dmPeers[m.from.id] = { ...(S.dmPeers[m.from.id] || {}), ...m.from, online: true };
+  if (msg.voice) { S.dmPeers[m.from.id].online = true; setTimeout(() => checkVoicemail(true), 300); }
   if (addDmMsg(msg) && !document.hidden) return;                          // reading that chat right now
   S.dmUnread[msg.channel] = (S.dmUnread[msg.channel] || 0) + 1; saveDmUnread();
   if (!NATIVE) beep(740, 0.08); vibrate(60);
-  if (document.hidden) systemNotify(`💬 ${m.from.name}`, msg.text, 'dm:' + m.from.id);
-  else toast(`💬 ${m.from.name}: ${msg.text.slice(0, 60)}`);
+  const txt = msg.kind === 'talk' ? `🎙 ข้อความเสียง ${fmtDur(msg.ms)}` : msg.text;
+  if (document.hidden) systemNotify(`💬 ${m.from.name}`, txt, 'dm:' + m.from.id);
+  else if (!msg.voice) toast(`💬 ${m.from.name}: ${txt.slice(0, 60)}`);
   if (S.route === 'convos') render();
 }
 ROUTES.chat = () => {
@@ -1445,6 +1453,104 @@ ROUTES.members = async p => {
   };
   $('q').oninput = draw; draw();
 };
+// ---------------------------------------------------------------- voice messages (ฝากข้อความเสียง)
+const VM_MAX = 60000;
+function voiceMsgSheet(u) {
+  let timer = null, sending = false;
+  const bg = sheet(`<h3>ฝากข้อความเสียงถึง ${esc(u.name)}</h3>
+    <p class="small muted" style="margin-top:0">${esc(u.name)} ไม่ได้ออนไลน์ · จะมีหน้าต่างแจ้งเมื่อเขากลับมาออนไลน์ และเลือกได้ว่าจะฟังเลยหรือไว้ก่อน</p>
+    <div class="vmrec"><button type="button" class="vmbtn" id="vmBtn" aria-label="กดค้างแล้วพูด ปล่อยเพื่อส่ง">${icon('mic')}</button>
+      <div class="vmtime" id="vmTime">0:00 / 1:00</div><div class="small muted" id="vmHint">กดค้างแล้วพูด · ปล่อยเพื่อส่ง</div></div>
+    <button class="btn" type="button" id="vmCancel">ยกเลิก</button>`, b => {
+    b.querySelector('#vmCancel').onclick = () => { stop(true); closeSheet(); };
+  });
+  const btn = bg.querySelector('#vmBtn'), time = bg.querySelector('#vmTime'), hint = bg.querySelector('#vmHint');
+  const fmt = ms => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+  let held = false;
+  async function start() {
+    if (vmRec || sending) return;
+    held = true;
+    try { ensureCtx(); await ensureMic(); } catch (e) { held = false; return toast('เปิดไมโครโฟนไม่ได้: ' + (e.message || e)); }
+    if (!held) return;
+    vmRec = { chunks: [], t0: Date.now() };
+    btn.classList.add('on'); hint.textContent = 'กำลังอัด… ปล่อยเพื่อส่ง'; vibrate(30);
+    timer = setInterval(() => { const ms = Date.now() - vmRec.t0; time.textContent = `${fmt(ms)} / 1:00`; if (ms >= VM_MAX) stop(); }, 200);
+  }
+  async function stop(cancel) {
+    held = false;
+    if (!vmRec) return;
+    const rec = vmRec; vmRec = null; clearInterval(timer); setMeter(0);
+    btn.classList.remove('on');
+    const ms = Date.now() - rec.t0;
+    if (cancel || !btn.isConnected) return;
+    if (ms < 700) { hint.textContent = 'สั้นเกินไป กดค้างไว้แล้วพูด'; time.textContent = '0:00 / 1:00'; return; }
+    const n = rec.chunks.reduce((a, c) => a + c.length, 0), pcm = new Int16Array(n);
+    let o = 0; for (const c of rec.chunks) { pcm.set(c, o); o += c.length; }
+    sending = true; hint.textContent = 'กำลังส่ง…';
+    try {
+      const r = await netFetch(`/api/dm/${u.id}/voice?rate=${TARGET_RATE}`, { method: 'POST', headers: { Authorization: 'Bearer ' + S.token, 'Content-Type': 'application/octet-stream' }, body: pcm.buffer });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+      closeSheet(); toast(`ส่งข้อความเสียงถึง ${u.name} แล้ว`); addDmMsg(d.msg);
+    } catch (e) { sending = false; hint.textContent = 'ส่งไม่สำเร็จ: ' + e.message + ' · ลองใหม่'; time.textContent = '0:00 / 1:00'; }
+  }
+  btn.addEventListener('pointerdown', e => { e.preventDefault(); try { btn.setPointerCapture(e.pointerId); } catch {} start(); });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => btn.addEventListener(ev, () => stop()));
+  btn.addEventListener('contextmenu', e => e.preventDefault());
+  btn.addEventListener('keydown', e => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); start(); } });
+  btn.addEventListener('keyup', e => { if (e.key === ' ' || e.key === 'Enter') stop(); });
+  const mo = new MutationObserver(() => { if (!bg.isConnected) { mo.disconnect(); stop(true); } });
+  mo.observe($('app'), { childList: true });
+}
+function markVmHeard(id) {
+  if (!S.vm || !S.vm.some(v => v.id === id)) return;
+  S.vm = S.vm.filter(v => v.id !== id);
+  api(`/api/voicemail/${id}/heard`, { method: 'POST' }).catch(() => {});
+}
+/** waiting voice messages -> popup: listen now or later */
+async function checkVoicemail(fresh) {
+  if (!ACC() || !S.user) return;
+  let list;
+  try { list = await api('/api/voicemail'); } catch { return; }
+  S.vm = list;
+  S.vmSeen = S.vmSeen || new Set();
+  const news = fresh ? list : list.filter(v => !S.vmSeen.has(v.id));
+  if (!news.length) return;
+  if ($('sheet') && !$('vmPop')) { if (fresh) toast(`🎙 ข้อความเสียงใหม่จาก ${news[news.length - 1].name}`); return; }   // don't cover something the user is doing
+  list.forEach(v => S.vmSeen.add(v.id));
+  if (!NATIVE) beep(740, 0.1); vibrate([60, 40, 60]);
+  S.vmPop = list;
+  showVmPop();
+}
+function showVmPop() {
+  const list = S.vmPop;
+  if (!list || !list.length || ['splash', 'login', 'setpw'].includes(S.route)) return;
+  const who = [...new Set(list.map(v => v.name))];
+  sheet(`<div id="vmPop"><h3>🎙 มีข้อความเสียงถึงคุณ ${list.length} ข้อความ</h3>
+    <p class="small muted" style="margin-top:0">จาก ${who.map(esc).join(', ')} · ฝากไว้ตอนคุณไม่ได้ออนไลน์</p>
+    <div class="vmlist">${list.map(v => `<div class="vmitem">${avatar({ id: v.from_id, name: v.name, has_avatar: v.has_avatar })}<div class="grow"><b>${esc(v.name)}</b><div class="small muted">${fmtTime(v.ts)} น.</div></div>${voiceHtml({ ...v, audio: 1 })}</div>`).join('')}</div>
+    <button class="btn primary" type="button" id="vmNow">${icon('play')}ฟังเลย</button>
+    <button class="btn" type="button" id="vmLater" style="margin-top:10px">ไว้ทีหลัง</button>
+    <p class="small muted" style="text-align:center">ฟังทีหลังได้ในแชทส่วนตัว · เก็บไว้ 3 วัน</p></div>`, bg => {
+    bg.addEventListener('click', e => { if (e.target === bg) S.vmPop = null; });
+    bg.querySelector('#vmLater').onclick = () => { S.vmPop = null; closeSheet(); toast('เก็บไว้แล้ว จะถามอีกครั้งเมื่อเปิดแอปครั้งถัดไป'); };
+    bg.querySelector('#vmNow').onclick = async () => {
+      const b = bg.querySelector('#vmNow'); b.disabled = true; S.vmPop = null; bg.querySelector('#vmPop').dataset.played = '1';
+      for (const btn of $$('[data-play]', bg)) {
+        if (!bg.isConnected) return;
+        btn.closest('.vmitem').classList.add('playing');
+        await new Promise(res => { playRecording(btn).then(() => { if (!player || player.btn !== btn) return res(); player.audio.addEventListener('ended', res); player.audio.addEventListener('pause', res); }); });
+        btn.closest('.vmitem').classList.remove('playing');
+      }
+      if (!bg.isConnected) return;
+      const last = list[list.length - 1];
+      b.disabled = false; b.innerHTML = `${icon('chat')}ตอบกลับ ${esc(last.name)}`;
+      b.onclick = () => { closeSheet(); go('dm', { u: last.from_id }); };
+      bg.querySelector('#vmLater').textContent = 'ปิด';
+      bg.querySelector('#vmLater').onclick = closeSheet;
+    };
+  });
+}
 function userSheet(u) {
   sheet(`<div class="prof">${avatar(u, 'av')}<h2>${esc(u.name)}</h2><div class="muted">รหัสพนักงาน : ${esc(u.emp)}</div>
     <div style="color:${u.online ? 'var(--ok-fg)' : 'var(--muted)'};margin-top:4px"><span class="dot ${u.online ? 'on' : ''}"></span> ${u.online ? 'ออนไลน์' + (u.channel ? ' · ' + esc(u.channel) : '') : 'ออฟไลน์'}</div></div>
@@ -1453,7 +1559,8 @@ function userSheet(u) {
     ${S.user && u.id !== S.user.id ? `<button class="btn" id="dmU" style="margin-top:10px">${icon('chat')}แชทส่วนตัว</button>` : ''}
     ${S.user && u.id !== S.user.id ? `<button class="btn" id="invU" style="margin-top:10px">${icon('plus')}เชิญเข้ากลุ่ม</button>` : ''}
     ${u.online && u.channel && u.channel !== 'คุยส่วนตัว' ? `<button class="btn" id="joinU" style="margin-top:10px">${icon('mic')}ไปห้อง ${esc(u.channel)}</button>` : ''}
-    ${!u.online && S.user && u.id !== S.user.id ? '<p class="small muted" style="text-align:center">วอหาส่วนตัวได้เมื่อผู้ใช้นี้ออนไลน์อยู่</p>' : ''}`, bg => {
+    ${!u.online && S.user && u.id !== S.user.id ? `<button class="btn primary" id="vmU" style="margin-top:10px">${icon('mic')}ฝากข้อความเสียง</button><p class="small muted" style="text-align:center">ไม่ได้ออนไลน์ · ฝากเสียงไว้ เขาจะได้รับแจ้งเมื่อกลับมาออนไลน์</p>` : ''}`, bg => {
+    const vm = bg.querySelector('#vmU'); if (vm) vm.onclick = () => voiceMsgSheet(u);
     const j = bg.querySelector('#joinU'); if (j) j.onclick = () => { closeSheet(); enterRoom(u.channel, 'ptt'); };
     const cu = bg.querySelector('#callU'); if (cu) cu.onclick = () => { closeSheet(); startCall(u); };
     const iv = bg.querySelector('#invU'); if (iv) iv.onclick = () => inviteSheet(u);

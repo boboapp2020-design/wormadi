@@ -3,7 +3,7 @@
 //   ทุก API (ยกเว้น config/channels/login) ต้องส่ง  Authorization: Bearer <token>  จาก /api/login
 //   สิทธิ์: user (พนักงาน) < lead (หัวหน้า: มอบงาน, ปิดเหตุ SOS, ดูรายงาน/log) < admin (ผู้ดูแลระบบ)
 import { WalkieRoom, reactionsFor, EMOJIS, LOBBY } from './room.js';
-import { toWav } from './codec.js';
+import { toWav, compress } from './codec.js';
 import { pushAll, pushReady } from './push.js';
 import { hashPassword, verifyPassword, createSession, userFromToken, bearer, sha256, roleAtLeast, ROLES, PUBLIC_USER } from './auth.js';
 
@@ -81,6 +81,7 @@ export default {
     const recCut = now - (Number(env.RECORDING_RETENTION_DAYS) || 7) * day;
     await env.DB.batch([
       env.DB.prepare('DELETE FROM audio_clips WHERE ts < ?').bind(recCut),
+      env.DB.prepare('DELETE FROM voicemail WHERE ts < ?').bind(recCut),
       env.DB.prepare(`UPDATE messages SET audio = NULL WHERE audio = 'db' AND ts < ?`).bind(recCut),
     ]);
     if (env.REC) {   // recordings: rec/YYYY-MM-DD/<id>.wav
@@ -392,6 +393,45 @@ async function api(req, env, url) {
     const peers = ids.length ? (await db.prepare(`SELECT ${PUBLIC_USER} FROM users u WHERE u.id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all()).results : [];
     const online = new Set((await roomCall(env, '/online')).map(o => o.id));
     return json(mine.map((r, i) => ({ ...r, peer: { ...(peers.find(u => u.id === ids[i]) || { id: ids[i], name: '?' }), online: online.has(ids[i]) } })));
+  }
+  // ---- voice message to someone (usually offline): PCM16 body, ?rate=16000 · kept like other recordings
+  if (seg[1] === 'dm' && id && seg[3] === 'voice' && m === 'POST') {
+    if (id === me.id) return fail(400, 'ส่งถึงตัวเองไม่ได้');
+    const to = await db.prepare('SELECT id, name FROM users WHERE id = ? AND active = 1').bind(id).first();
+    if (!to) return fail(404, 'ไม่พบผู้ใช้นี้');
+    const rate = Math.min(48000, Math.max(8000, Number(url.searchParams.get('rate')) || 16000));
+    const buf = await req.arrayBuffer();
+    const bytes = buf.byteLength - (buf.byteLength % 2);
+    if (bytes < rate * 2 * 0.5) return fail(400, 'ข้อความเสียงสั้นเกินไป');
+    if (bytes > rate * 2 * 62) return fail(413, 'ข้อความเสียงยาวได้ไม่เกิน 60 วินาที');
+    const ms = Math.round(bytes / 2 / rate * 1000);
+    const c = compress([buf], bytes, rate);
+    const channel = `dm:${Math.min(me.id, id)}:${Math.max(me.id, id)}`, ts = Date.now();
+    const r = await db.prepare(`INSERT INTO messages (ts, channel, kind, name, dept, uid, user_id, ms, audio) VALUES (?, ?, 'talk', ?, ?, '', ?, ?, 'db')`)
+      .bind(ts, channel, me.name, me.dept || '', me.id, ms).run();
+    const mid = r.meta.last_row_id;
+    await db.batch([
+      db.prepare('INSERT OR REPLACE INTO audio_clips (msg_id, ts, rate, data) VALUES (?, ?, ?, ?)').bind(mid, ts, c.rate, c.data),
+      db.prepare('INSERT INTO voicemail (msg_id, to_id, from_id, ts) VALUES (?, ?, ?, ?)').bind(mid, id, me.id, ts),
+      db.prepare('INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(ts, id, 'dm', `🎙 ข้อความเสียงจาก ${me.name}`, `ยาว ${Math.max(1, Math.round(ms / 1000))} วินาที`, 'dm:' + me.id),
+    ]);
+    const msg = { id: mid, ts, channel, kind: 'talk', name: me.name, dept: me.dept || '', uid: '', user_id: me.id, ms, audio: 1, voice: 1 };
+    const from = { id: me.id, name: me.name, dept: me.dept || '' };
+    const { delivered } = await roomCall(env, '/broadcast', { msg: { type: 'dm', msg, from, to: id }, userIds: [id] });
+    await roomCall(env, '/broadcast', { msg: { type: 'dm', msg, from, to: id, mine: true }, userIds: [me.id] });
+    return json({ ok: true, msg, delivered });
+  }
+  if (p === '/api/voicemail' && m === 'GET') {     // voice messages I have not listened to yet
+    const { results } = await db.prepare(
+      `SELECT v.msg_id AS id, v.ts, v.from_id, COALESCE(u.name, mm.name) AS name, u.dept, u.avatar IS NOT NULL AS has_avatar, mm.ms, mm.channel
+       FROM voicemail v JOIN messages mm ON mm.id = v.msg_id LEFT JOIN users u ON u.id = v.from_id
+       WHERE v.to_id = ? AND v.heard = 0 AND mm.audio IS NOT NULL ORDER BY v.ts`).bind(me.id).all();
+    return json(results);
+  }
+  if (seg[1] === 'voicemail' && id && seg[3] === 'heard' && m === 'POST') {
+    await db.prepare('UPDATE voicemail SET heard = 1 WHERE msg_id = ? AND to_id = ?').bind(id, me.id).run();
+    return json({ ok: true });
   }
   if (seg[1] === 'dm' && id && m === 'POST') {    // send a private message
     const text = str((await readJson(req)).text, 1000);

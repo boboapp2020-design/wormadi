@@ -474,3 +474,16 @@ select.sel-sm { min-height:40px; padding:6px 34px 6px 12px; border-radius:10px; 
 .rc { display:flex; gap:14px; align-items:baseline; padding:11px 14px; border-bottom:1px solid var(--line-soft); font-size:16px; }
 .rc:last-child { border-bottom:0; }
 .rc b { min-width:62px; color:var(--primary-fg); font-size:17px; }
+
+/* voice messages (ฝากข้อความเสียง) */
+.vmrec { display:flex; flex-direction:column; align-items:center; gap:8px; margin:6px 0 16px; }
+.vmbtn { width:120px; height:120px; border-radius:50%; border:0; display:grid; place-items:center; color:#fff; cursor:pointer; touch-action:none; user-select:none; -webkit-user-select:none;
+  background:radial-gradient(circle at 35% 30%, #ffb347, #e06a00 70%); box-shadow:0 8px 22px rgba(224,106,0,.45), inset 0 2px 0 rgba(255,255,255,.35); }
+.vmbtn svg { width:52px; height:52px; }
+.vmbtn.on { background:radial-gradient(circle at 35% 30%, #ff7a6b, #c81e1e 70%); box-shadow:0 0 0 8px rgba(200,30,30,.18), 0 8px 22px rgba(200,30,30,.45); }
+.vmbtn:focus-visible { outline:3px solid var(--primary); outline-offset:4px; }
+.vmtime { font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; }
+.vmlist { display:flex; flex-direction:column; gap:8px; margin:4px 0 14px; max-height:40vh; overflow:auto; }
+.vmitem { display:flex; align-items:center; gap:10px; padding:8px; border-radius:14px; border:1px solid var(--line-soft); }
+.vmitem .av { width:40px; height:40px; flex:none; }
+.vmitem.playing { border-color:var(--primary); box-shadow:0 0 0 2px color-mix(in srgb, var(--primary) 30%, transparent); }
