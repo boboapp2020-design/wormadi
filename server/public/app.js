@@ -298,7 +298,8 @@ function toggleMute(n) {
 function savedRooms() { try { const r = JSON.parse(lsGet('walkie_rooms') || 'null'); return Array.isArray(r) && r.length ? r : [LOBBY]; } catch { return [LOBBY]; } }
 function saveRooms(r) { lsSet('walkie_rooms', JSON.stringify([...new Set(r.filter(x => x && !isDm(x)))])); }
 /** the rooms to be in when the talk room is "active" */
-function roomsWith(active) { const r = savedRooms(); if (active && !r.includes(active)) r.push(active); if (S.call && S.call.status === 'active' && !r.includes(S.call.channel)) r.push(S.call.channel); return r; }
+/** I hear only the room I am in (plus an active private call) until I move; "my rooms" stays a list to switch between */
+function roomsWith(active) { const r = active ? [active] : []; if (S.call && S.call.status === 'active' && !r.includes(S.call.channel)) r.push(S.call.channel); return r; }
 function joinNow(channel) {
   const ch = channel || (S.call && S.call.status === 'active' ? S.call.channel : '') || lsGet('walkie_channel') || '';
   if (NATIVE) return WN.switchChannel({ channel: ch });
@@ -307,7 +308,7 @@ function joinNow(channel) {
 /** the room drop-down: my rooms first, then the other rooms, then create / see all */
 function roomMenuHtml() {
   const cur = (S.me && S.me.channel) || '';
-  const mine = ((S.me && S.me.rooms) || [cur]).filter(r => r && !isDm(r));
+  const mine = (ACC() ? savedRooms() : (S.me && S.me.rooms) || [cur]).filter(r => r && !isDm(r));
   if (cur && !isDm(cur) && !mine.includes(cur)) mine.unshift(cur);
   const row = n => {
     const c = S.channels.find(x => x.name === n) || chanInfo(n), cnt = S.counts[n], on = n === cur;
@@ -356,7 +357,7 @@ function onMessage(m) {
       const changed = !S.me || S.me.channel !== m.channel;
       S.me = m; attempt = 0; setConn('online');
       if (ACC() && Array.isArray(m.rooms)) {
-        saveRooms(m.rooms);
+        saveRooms([...savedRooms(), ...m.rooms]);
         const want = roomsWith(m.channel);
         if (NATIVE && want.some(r => !m.rooms.includes(r)) && !S.roomSync) { S.roomSync = true; sendMsg({ type: 'join', channel: m.channel, rooms: want }); setTimeout(() => (S.roomSync = false), 3000); }
       }
@@ -974,7 +975,7 @@ ROUTES.ptt = () => {
     <header class="hd safe-top"><button class="ib" data-back aria-label="กลับ">${icon('back')}</button><h1>Walkie Talkie</h1>
       <button class="ib" id="spk" aria-label="${S.prefs.speaker ? 'ปิดเสียงลำโพง' : 'เปิดเสียงลำโพง'}">${icon(S.prefs.speaker ? 'volume' : 'mute')}</button></header>
     <div class="hearbar hidden" id="hearBar" role="status" aria-live="polite"></div>
-    <div class="lbl2">พูดเข้าห้อง</div>
+    <div class="lbl2">อยู่ห้อง</div>
     <div class="chwrap">
       <button class="chcard" id="chPick" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="chMenu" aria-label="เลือกห้องที่จะพูด" ${!S.me || (ch && ch.dm) ? 'disabled' : ''}>${ch ? chanIcon(ch) : `<span class="ic">${icon('radio')}</span>`}
         <span class="grow"><b class="ell">${esc(ch ? (ch.dm ? ch.name : roomLabel(S.me.channel)) : S.me ? 'เลือกห้อง' : 'กำลังเชื่อมต่อ…')}</b><small>${icon('user')}<span data-chcount></span></small></span><span class="chdd">${icon('down')}</span></button>
@@ -1055,11 +1056,11 @@ ROUTES.channels = p => {
       const list = S.channels.filter(c => (tab !== 'fav' || S.favs.includes(c.name)) && (!q || c.name.toLowerCase().includes(q) || (c.sub || '').toLowerCase().includes(q)));
       $('chList').innerHTML = list.length ? list.map(c => {
         const cur = S.me && S.me.channel === c.name, fav = S.favs.includes(c.name);
-        const member = !!(S.me && (S.me.rooms || [S.me.channel]).includes(c.name));
-        const canLeave = member && (!c.lobby || (S.me.rooms || []).filter(r => !isDm(r)).length > 1);
+        const member = !!(S.me && (ACC() ? savedRooms() : S.me.rooms || [S.me.channel]).includes(c.name));
+        const canLeave = member && (!c.lobby || (ACC() ? savedRooms() : S.me.rooms || []).filter(r => !isDm(r)).length > 1);
         const lock = c.locked ? `<span title="มีรหัส" style="color:${c.access ? 'var(--muted)' : 'var(--err-fg)'}">${icon('lock')}</span>` : '';
         return `<div class="li" role="button" tabindex="0" data-ch="${esc(c.name)}">${chanIcon(c)}
-          <div class="grow"><div class="t1 ell">${esc(c.name)} ${lock}${cur ? ' <span class="pill new">พูดห้องนี้</span>' : member ? ' <span class="pill">ฟังอยู่</span>' : ''}</div><div class="t2 ell">${icon('user')}${S.counts[c.name] || 0} คน${c.locked ? (c.access ? ' · มีรหัส (เข้าได้แล้ว)' : ' · มีรหัส') : ' · ห้องเปิด'}${c.creator_name ? ' · โดย ' + esc(c.creator_name) : ''}</div></div>
+          <div class="grow"><div class="t1 ell">${esc(c.name)} ${lock}${cur ? ' <span class="pill new">อยู่ห้องนี้</span>' : member ? ' <span class="pill">ห้องของฉัน</span>' : ''}</div><div class="t2 ell">${icon('user')}${S.counts[c.name] || 0} คน${c.locked ? (c.access ? ' · มีรหัส (เข้าได้แล้ว)' : ' · มีรหัส') : ' · ห้องเปิด'}${c.creator_name ? ' · โดย ' + esc(c.creator_name) : ''}</div></div>
           ${c.lobby ? '' : `<button class="ib" data-share="${c.id}" aria-label="แชร์ห้อง ${esc(c.name)}" style="color:var(--primary-fg)">${icon('send')}</button>`}
           ${c.can_delete ? `<button class="ib" data-del="${c.id}" aria-label="ลบห้อง ${esc(c.name)}" style="color:var(--err-fg)">${icon('trash')}</button>` : ''}
           <button class="ib" data-fav="${esc(c.name)}" aria-label="${fav ? 'เอาออกจากรายการโปรด' : 'เพิ่มในรายการโปรด'}" style="color:${fav ? '#e0a100' : 'var(--nav-muted)'}">${icon(fav ? 'starf' : 'star')}</button>
@@ -1188,7 +1189,7 @@ function confirmRoom(c, then) {
   sheet(`<div style="text-align:center">
       <div style="display:flex;justify-content:center;margin:4px 0 8px">${chanIcon(c)}</div>
       <h3 style="margin:4px 0">เข้ากลุ่ม “${esc(c.name)}” ?</h3>
-      <p class="small muted" style="margin:4px 0 16px">${S.counts[c.name] || 0} คนออนไลน์${c.sub ? ' · ' + esc(c.sub) : ''}${c.locked && !c.access ? '<br>กลุ่มนี้มีรหัส ต้องใส่รหัสก่อนเข้า' : ''}${cur ? `<br>จะพูดเข้าห้องนี้ · ยังได้ยินห้อง “${esc(roomLabel(cur))}” ต่อ` : ''}</p>
+      <p class="small muted" style="margin:4px 0 16px">${S.counts[c.name] || 0} คนออนไลน์${c.sub ? ' · ' + esc(c.sub) : ''}${c.locked && !c.access ? '<br>กลุ่มนี้มีรหัส ต้องใส่รหัสก่อนเข้า' : ''}${cur ? `<br>จะได้ยินเฉพาะห้องนี้ (ออกจาก “${esc(roomLabel(cur))}”)` : ''}</p>
       <div style="display:flex;gap:10px"><button class="btn" id="crNo" type="button">ยกเลิก</button><button class="btn primary" id="crYes" type="button">${icon('team')}เข้ากลุ่ม</button></div></div>`, () => {
     $('crNo').onclick = closeSheet;
     $('crYes').onclick = () => { closeSheet(); enterRoom(c.name, then, { confirmed: true }); };
@@ -1237,7 +1238,7 @@ function roomMembersSheet() {
 function enterRoom(name, then, opts = {}) {
   const c = S.channels.find(x => x.name === name);
   if (S.me && S.me.channel === name) { if (then) go(then, {}, true); return; }     // already here
-  if (S.me && (S.me.rooms || []).includes(name)) { setTalkRoom(name); if (then) go(then, {}, true); return; }   // already in it: talk there
+  if (S.me && (ACC() ? savedRooms() : S.me.rooms || []).includes(name)) { setTalkRoom(name); if (then) go(then, {}, true); return; }   // one of my rooms: move there
   if (!opts.confirmed && c && !c.lobby) return confirmRoom(c, then);     // the all-hands channel needs no confirmation
   if (c && c.locked && !c.access) return askRoomPass(c, then);
   if (!S.me || S.me.channel !== name) { stopTalking(true); joinNow(name); }
@@ -1954,7 +1955,7 @@ ROUTES.settings = () => {
       ${row('sTheme', curTheme() === 'dark' ? 'moon' : 'sun', 'ธีม', '', `<span class="small muted">${curTheme() === 'dark' ? 'กลางคืน (มืด)' : 'ภาคสนาม (สว่าง)'}</span>`)}
       <label class="setrow web-only">${icon('sun', 'i lead')}<div class="grow"><b>ให้จอติดค้างไว้</b><small>จอไม่ดับขณะเปิดแอป จะได้ยินเสียงแน่นอนที่สุด (กินแบตเพิ่ม)</small></div><input type="checkbox" class="sw" id="optWake" ${wakeOn() ? 'checked' : ''}></label>
       <div class="setrow" style="background:color-mix(in srgb, #cf2020 8%, transparent)">${icon('siren', 'i lead')}<div class="grow"><b>เหตุฉุกเฉิน (SOS) ดังเสมอ</b><small>ดังเสมอเมื่อเข้าสู่ระบบ${pushState() === 'off' ? ' · <b style="color:var(--err-fg)">ยังไม่ได้อนุญาตการแจ้งเตือน</b>' : ''}</small></div>${pushState() === 'off' ? '<button class="btn sm primary" id="sPush" type="button">อนุญาต</button>' : '<span class="small muted">เปิดอยู่</span>'}</div>
-      <label class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินเสียงคุยเมื่อพับ / ปิดแอป</b><small>${NATIVE ? 'ได้ยินแม้ปิดแอป' : IOS ? 'iPhone อาจเงียบเมื่อพับนาน' : 'ได้ยินเมื่อพับแอปหรือปิดจอ'}</small></div><input type="checkbox" class="sw" id="optKeep" ${keepOn() ? 'checked' : ''}></label>
+      <div class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินตลอดเวลา</b><small>${NATIVE ? 'แม้พับหรือปิดแอป · หยุดเมื่อออกจากระบบเท่านั้น' : IOS ? 'เมื่อพับแอป (iPhone อาจหยุดเมื่อพับนาน) · หยุดเมื่อออกจากระบบ' : 'เมื่อพับแอปหรือปิดจอ · ถ้าปัดปิดแอปทิ้ง ต้องใช้แอป Android · หยุดเมื่อออกจากระบบ'}</small></div></div>
       ${!NATIVE && !standalone() ? row('sInstall', 'download', 'ติดตั้งแอปลงหน้าจอ', installEvt ? 'แตะเพื่อติดตั้ง ใช้งานเต็มจอเหมือนแอป' : IOS ? 'Safari: ปุ่มแชร์ > เพิ่มไปยังหน้าจอโฮม' : 'แตะเพื่อดูวิธีติดตั้ง') : ''}
       ${NATIVE ? row('sBatt', 'battery', 'ให้แอปทำงานตอนจอดับ', 'ปิดการประหยัดแบตเตอรี่') : ''}
     </div>
@@ -1982,7 +1983,6 @@ ROUTES.settings = () => {
     on('sHelp', help); on('sAbout', about);
     on('sOut', () => { if (confirm('ออกจากระบบ?')) signOut(); });
     const w = $('optWake'); if (w) w.onchange = () => { lsSet('walkie_wake', w.checked ? '1' : '0'); setWake(w.checked); };
-    const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); toast(k.checked ? 'ได้ยินเสียงคุยเมื่อพับ / ปิดแอป: เปิด' : 'ปิดเสียงคุยเมื่อพับแอป (เหตุฉุกเฉินยังดังตามปกติ)'); };
     const pb = $('sPush'); if (pb) pb.onclick = async () => { await enablePush(true); render(); };
   });
 };
@@ -2222,7 +2222,7 @@ function bindInstallBar(root) {
 function renderInstallBars() { for (const el of $$('[data-install]')) { const h = installBar(); if (h) { el.outerHTML = h; } else el.remove(); } bindInstallBar(document); }
 if (!NATIVE && 'serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
 let wakeLock = null, keepAudio = null;
-const wakeOn = () => lsGet('walkie_wake') === '1', keepOn = () => lsGet('walkie_keep') !== '0';   // listening in the background is on unless turned off
+const wakeOn = () => lsGet('walkie_wake') === '1', keepOn = () => true;   // always listening while signed in; only logging out stops it
 async function setWake(on) {
   if (on && 'wakeLock' in navigator && !document.hidden) { try { wakeLock = await navigator.wakeLock.request('screen'); } catch {} }
   else if (!on && wakeLock) { try { await wakeLock.release(); } catch {} wakeLock = null; }
