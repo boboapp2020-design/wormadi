@@ -1622,20 +1622,19 @@ function showVmPop() {
   });
 }
 function userSheet(u) {
-  sheet(`<div class="prof">${avatar(u, 'av')}<h2>${esc(u.name)}</h2><div class="muted">รหัสพนักงาน : ${esc(u.emp)}</div>
+  sheet(`<div class="usheet"><div class="prof">${avatar(u, 'av')}<h2>${esc(u.name)}</h2><div class="muted">รหัสพนักงาน : ${esc(u.emp)}</div>
     <div style="color:${u.online ? 'var(--ok-fg)' : 'var(--muted)'};margin-top:4px"><span class="dot ${u.online ? 'on' : ''}"></span> ${u.online ? 'ออนไลน์' + (u.channel ? ' · ' + esc(u.channel) : '') : 'ออฟไลน์'}</div></div>
-    <div class="list kv">${kv('building', 'แผนก', u.dept)}${kv('brief', 'ตำแหน่ง', u.position)}${kv('antenna', 'ช่องหลัก', u.main_channel_name)}${kv('shield', 'สิทธิ์การใช้งาน', ROLE_NAME[u.role])}</div>
+    <div class="list kv kv2">${kv('building', 'แผนก', u.dept)}${kv('brief', 'ตำแหน่ง', u.position)}${kv('antenna', 'ช่องหลัก', u.main_channel_name)}${kv('shield', 'สิทธิ์การใช้งาน', ROLE_NAME[u.role])}</div>
     ${u.online && S.user && u.id !== S.user.id ? `<button class="btn primary" id="callU">${icon('walkie')}วอหาส่วนตัว</button>` : ''}
-    ${S.user && u.id !== S.user.id ? `<button class="btn" id="dmU" style="margin-top:10px">${icon('chat')}แชทส่วนตัว</button>` : ''}
-    ${S.user && u.id !== S.user.id ? `<button class="btn" id="invU" style="margin-top:10px">${icon('plus')}เชิญเข้ากลุ่ม</button>` : ''}
+    ${S.user && u.id !== S.user.id ? `<div class="btnrow"><button class="btn" id="dmU">${icon('chat')}แชทส่วนตัว</button><button class="btn" id="invU">${icon('plus')}เชิญเข้ากลุ่ม</button></div>` : ''}
     ${u.online && u.channel && u.channel !== 'คุยส่วนตัว' ? `<button class="btn" id="joinU" style="margin-top:10px">${icon('mic')}ไปห้อง ${esc(u.channel)}</button>` : ''}
-    ${!u.online && S.user && u.id !== S.user.id ? `<button class="btn primary" id="vmU" style="margin-top:10px">${icon('mic')}ฝากข้อความเสียง</button><p class="small muted" style="text-align:center">ไม่ได้ออนไลน์ · ฝากเสียงไว้ เขาจะได้รับแจ้งเมื่อกลับมาออนไลน์</p>` : ''}`, bg => {
+    ${!u.online && S.user && u.id !== S.user.id ? `<button class="btn primary" id="vmU" style="margin-top:10px">${icon('mic')}ฝากข้อความเสียง</button><p class="small muted" style="text-align:center">ไม่ได้ออนไลน์ · ฝากเสียงไว้ เขาจะได้รับแจ้งเมื่อกลับมาออนไลน์</p>` : ''}</div>`, bg => {
     const vm = bg.querySelector('#vmU'); if (vm) vm.onclick = () => voiceMsgSheet(u);
     const j = bg.querySelector('#joinU'); if (j) j.onclick = () => { closeSheet(); enterRoom(u.channel, 'ptt'); };
     const cu = bg.querySelector('#callU'); if (cu) cu.onclick = () => { closeSheet(); startCall(u); };
     const iv = bg.querySelector('#invU'); if (iv) iv.onclick = () => inviteSheet(u);
     const dmb = bg.querySelector('#dmU'); if (dmb) dmb.onclick = () => { closeSheet(); S.dmPeers[u.id] = u; go('dm', { u: u.id }); };
-    const av = bg.querySelector('.prof .av'); if (av) { av.style.width = '96px'; av.style.height = '96px'; av.style.margin = '0 auto'; }
+    const av = bg.querySelector('.prof .av'); if (av) { av.style.width = '72px'; av.style.height = '72px'; av.style.margin = '0 auto'; }
   });
 }
 const kv = (ic, k, v) => `<div class="li">${`<span class="ic">${icon(ic)}</span>`}<div class="grow"><div class="t1">${k}</div><div class="t2">${esc(v || '-')}</div></div></div>`;

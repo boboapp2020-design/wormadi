@@ -562,3 +562,13 @@ label.lbl.lvlbl { margin:4px 2px 8px; line-height:1.6; }
 .cmmeta button:active { color:var(--primary-fg); } .cmmeta .del { color:var(--err-fg); font-weight:600; }
 .replying { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 14px; background:var(--primary-soft); color:var(--primary-fg); font-size:14px; border-top:1px solid var(--line-soft); }
 .replying .ib { width:34px; height:34px; color:inherit; }
+
+/* member sheet: fits the screen without scrolling */
+.usheet .prof { padding:6px 16px 2px; } .usheet .prof h2 { font-size:22px; margin:6px 0 0; } .usheet .prof .muted { font-size:14px; }
+.usheet .list.kv2 { display:grid; grid-template-columns:1fr 1fr; margin:8px 0; }
+.usheet .kv2 .li { padding:8px 10px; gap:8px; border-bottom:1px solid var(--line-soft); min-width:0; }
+.usheet .kv2 .li:nth-child(odd) { border-right:1px solid var(--line-soft); } .usheet .kv2 .li:nth-last-child(-n+2) { border-bottom:0; }
+.usheet .kv2 .ic { width:34px; height:34px; flex:none; border-radius:10px; } .usheet .kv2 .ic svg.i { width:18px; height:18px; }
+.usheet .kv2 .t1 { font-size:12px; } .usheet .kv2 .t2 { font-size:14px; line-height:1.25; display:block; overflow-wrap:anywhere; }
+.usheet .btn { min-height:46px; margin-top:8px; font-size:16px; } .usheet .btnrow { display:flex; gap:8px; } .usheet .btnrow .btn { flex:1; padding-left:6px; padding-right:6px; }
+.usheet p.small { margin:6px 0 0; font-size:12px; }
