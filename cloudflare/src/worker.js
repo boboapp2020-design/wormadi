@@ -615,6 +615,13 @@ async function api(req, env, url) {
     await roomCall(env, '/broadcast', { msg: { type: 'dm', msg, from, to: id, mine: true }, userIds: [me.id] });
     return json({ ok: true, msg, delivered });
   }
+  if (p === '/api/push/status' && m === 'GET') {     // who can be reached while their app is closed (leads / admins)
+    if (!roleAtLeast(me.role, 'lead')) return fail(403, 'ไม่มีสิทธิ์ใช้งานส่วนนี้');
+    const { results } = await db.prepare(
+      `SELECT u.id, u.emp, u.name, u.dept, u.must_change, u.last_seen, EXISTS(SELECT 1 FROM push_subs p WHERE p.user_id = u.id) AS push
+       FROM users u WHERE u.active = 1 ORDER BY push, u.name LIMIT 1000`).all();
+    return json(results.map(u => ({ id: u.id, emp: u.emp, name: u.name, dept: u.dept, used: !u.must_change, push: !!u.push })));
+  }
   if (p === '/api/missed-talks' && m === 'GET') {   // what was said in my rooms while my app was closed (since I went offline, 12 h at most)
     const mark = await db.prepare("SELECT ts FROM chat_reads WHERE user_id = ? AND channel = '#talk'").bind(me.id).first('ts');
     if (!mark) return json([]);
@@ -805,6 +812,8 @@ async function api(req, env, url) {
       pushAll(env, { exceptUserId: me.id }).catch(e => { console.error('sos push', e); return { sent: 0 }; }),
     ]);
     sos.pushed = push.sent || 0;
+    // closed apps keep ringing every 12 s for 3 minutes, until each person opens the app or the SOS is closed
+    await roomCall(env, '/ring', { key: 'sos:' + sos.id, exceptUserId: me.id, every: 12_000, until: Date.now() + 180_000 }).catch(() => {});
     return json({ ...sos, delivered });
   }
   if (seg[1] === 'sos' && id && seg[3] === 'ack' && m === 'POST') {
@@ -816,6 +825,7 @@ async function api(req, env, url) {
   if (seg[1] === 'sos' && id && seg[3] === 'close' && m === 'POST') {
     if (!roleAtLeast(me.role, 'lead')) return fail(403, 'เฉพาะหัวหน้าหรือผู้ดูแลระบบที่ปิดเหตุได้');
     await db.prepare(`UPDATE sos SET status = 'closed', closed_by = ?, closed_at = ? WHERE id = ?`).bind(me.id, Date.now(), id).run();
+    await roomCall(env, '/ring-stop', { key: 'sos:' + id }).catch(() => {});
     await roomCall(env, '/broadcast', { msg: { type: 'sos_closed', id, by: me.name } });
     return json({ ok: true });
   }

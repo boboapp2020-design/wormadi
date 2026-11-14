@@ -10,7 +10,7 @@
 import { compress } from './codec.js';
 import { DurableObject } from 'cloudflare:workers';
 import { userFromToken } from './auth.js';
-import { pushTo } from './push.js';
+import { pushTo, pushAll } from './push.js';
 
 const PING = '{"type":"ping"}';
 const PONG = '{"type":"pong"}';
@@ -92,6 +92,21 @@ export class WalkieRoom extends DurableObject {
         n++;
       }
       return Response.json({ kicked: n });
+    }
+    if (url.pathname === '/ring') {             // start ringing closed apps again and again (SOS)
+      const { key, exceptUserId = null, every = 12_000, until } = await req.json();
+      const rings = (await this.ctx.storage.get('rings')) || {};
+      rings[key] = { exceptUserId, every, until, next: Date.now() + every, stopped: [] };
+      await this.ctx.storage.put('rings', rings);
+      const cur = await this.ctx.storage.getAlarm();
+      if (cur == null || cur > rings[key].next) await this.ctx.storage.setAlarm(rings[key].next);
+      return Response.json({ ok: true });
+    }
+    if (url.pathname === '/ring-stop') {
+      const { key } = await req.json();
+      const rings = (await this.ctx.storage.get('rings')) || {};
+      if (rings[key]) { delete rings[key]; await this.ctx.storage.put('rings', rings); }
+      return Response.json({ ok: true });
     }
     if (url.pathname === '/broadcast') {        // SOS, task assigned, notification
       const { msg, userIds, channel } = await req.json();
@@ -396,6 +411,10 @@ export class WalkieRoom extends DurableObject {
           } catch {}
         }
         this.send(ws, { type: 'joined', id: uid ?? now.cid, name, channel: ch, rooms, channels: this.channels, uid: devUid, emojis: EMOJIS });
+        if (uid) {
+          const rings = await this.ctx.storage.get('rings');
+          if (rings) { let ch = false; for (const k of Object.keys(rings)) if (!rings[k].stopped.includes(uid)) { rings[k].stopped.push(uid); ch = true; } if (ch) await this.ctx.storage.put('rings', rings); }
+        }
         if (uid && this.pages && this.pages.has(uid)) {
           const pg = this.pages.get(uid); this.pages.delete(uid);
           if (Date.now() - pg.ts < 180_000 && this.authed().some(o => this.info(o).uid === pg.from.id)) this.send(ws, { type: 'call', from: pg.from, channel: pg.channel });
@@ -509,7 +528,7 @@ export class WalkieRoom extends DurableObject {
         if (!targets.length) {                   // app closed: ring their phone with a push (the caller's app repeats this every 20 s)
           if (!this.env.DB || !(await this.env.DB.prepare('SELECT 1 FROM users WHERE id = ? AND active = 1').bind(to).first())) return this.send(ws, { type: 'call_fail', to, reason: 'offline', message: 'ไม่พบผู้ใช้นี้' });
           const now = Date.now(); this.pages = this.pages || new Map();
-          const prev = this.pages.get(to), fresh = !prev || prev.from.id !== me.uid || now - (prev.pushAt || 0) > 15_000;
+          const prev = this.pages.get(to), fresh = !prev || prev.from.id !== me.uid || now - (prev.pushAt || 0) > 8_000;
           const page = { from, channel, ts: now, pushAt: fresh ? now : prev.pushAt }; this.pages.set(to, page);
           let r = { sent: 0, ready: false };
           if (fresh && this.env.DB) {
@@ -583,6 +602,27 @@ export class WalkieRoom extends DurableObject {
 
   async alarm() {
     const now = Date.now();
+    let nextRing = null;
+    try {
+      const rings = await this.ctx.storage.get('rings');
+      if (rings && Object.keys(rings).length) {
+        const online = new Set(); for (const ws of this.authed()) { const c = this.info(ws); if (c.uid) online.add(c.uid); }
+        for (const k of Object.keys(rings)) {
+          const r = rings[k];
+          if (now > r.until) { delete rings[k]; continue; }
+          if (now >= r.next - 500) {
+            r.next = now + r.every;
+            if (this.env.DB) {
+              const { results } = await this.env.DB.prepare('SELECT DISTINCT user_id FROM push_subs WHERE user_id IS NOT ?').bind(r.exceptUserId).all();
+              const ids = results.map(x => x.user_id).filter(id => !online.has(id) && !r.stopped.includes(id));
+              if (ids.length) await pushTo(this.env, ids, { ttl: 60 }).catch(e => console.error('ring push', e));
+            }
+          }
+          nextRing = nextRing == null ? r.next : Math.min(nextRing, r.next);
+        }
+        await this.ctx.storage.put('rings', rings);
+      }
+    } catch (e) { console.error('rings', e); }
     for (const ws of this.ctx.getWebSockets()) {
       const last = this.ctx.getWebSocketAutoResponseTimestamp(ws);
       if (last && now - last.getTime() > STALE_MS) {
@@ -590,7 +630,9 @@ export class WalkieRoom extends DurableObject {
         try { ws.close(4000, 'stale'); } catch {}
       }
     }
-    if (this.ctx.getWebSockets().length) await this.ctx.storage.setAlarm(Date.now() + SWEEP_MS);
+    const sweep = this.ctx.getWebSockets().length ? Date.now() + SWEEP_MS : null;
+    const at = nextRing == null ? sweep : sweep == null ? nextRing : Math.min(sweep, nextRing);
+    if (at != null) await this.ctx.storage.setAlarm(at);
   }
 }
 

@@ -1,6 +1,6 @@
 // Service worker: ให้ติดตั้งเป็นแอปได้ เปิดหน้าแอปได้แม้เน็ตแกว่ง และกดแจ้งเตือนแล้วกลับเข้าแอป
 // หน้าเว็บ: ลองเน็ตก่อน (ได้เวอร์ชันใหม่เสมอ) ถ้าไม่มีเน็ตใช้ของที่เก็บไว้ · /api และ WebSocket ไม่ผ่าน cache
-const CACHE = 'wormadi-v45';
+const CACHE = 'wormadi-v46';
 // (index.html / log.html are cached when visited: Cloudflare redirects *.html to clean URLs)
 const SHELL = ['./', 'theme.css', 'app.css', 'app.js', 'manifest.webmanifest', 'vendor/qrcode.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-180.png', 'brand/logo.png', 'brand/app-icon.png', 'brand/wordmark.png'];
@@ -48,6 +48,15 @@ const kvPut = (key, val) => new Promise(res => {
 async function bumpBadge() {
   try { const n = ((await kv('unread')) || 0) + 1; await kvPut('unread', n); if (self.navigator.setAppBadge) await self.navigator.setAppBadge(n); } catch {}
 }
+/** show a brand-new notification (so the phone pops it up, sounds and vibrates again) and remove the older ones of the same group */
+async function showFresh(group, title, opt) {
+  try { for (const n of await self.registration.getNotifications()) if ((n.data && n.data.group === group) || n.tag === group) n.close(); } catch {}
+  return self.registration.showNotification(title, {
+    icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', silent: false, renotify: true, ...opt,
+    tag: group + '#' + Date.now(), timestamp: Date.now(), data: { ...(opt.data || {}), group },
+  });
+}
+const LONG_VIB = [900, 250, 900, 250, 900, 250, 900, 250, 900, 250, 900, 250, 900, 250, 900];     // ~9 s: with a ring every 12 s it is nearly continuous
 self.addEventListener('push', e => {
   e.waitUntil((async () => {
     const auth = await kv('auth');
@@ -57,24 +66,17 @@ self.addEventListener('push', e => {
       const r = await fetch(auth.base + '/api/push/latest', { headers: { Authorization: 'Bearer ' + auth.token }, cache: 'no-store' });
       if (r.ok) d = await r.json();
     } catch {}
+    if (d && d.kind === 'none') return showFresh('wormadi-info', 'WORMADI', { body: 'มีความเคลื่อนไหวใหม่ แตะเพื่อเปิดแอป', data: { url: './' } });
     if (d && d.kind === 'call') {                        // someone is calling me on the private walkie: ring until I open the app
-      return self.registration.showNotification(d.title, {
-        body: d.body, tag: 'wormadi-call', renotify: true, requireInteraction: true,
-        vibrate: [600, 200, 600, 200, 600, 200, 600], icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', data: { url: d.url },
-      });
+      return showFresh('wormadi-call', d.title, { body: d.body, requireInteraction: true, vibrate: LONG_VIB, data: { url: d.url } });
     }
-    if (d && (d.kind === 'dm' || d.kind === 'voice')) {
+    if (d && (d.kind === 'dm' || d.kind === 'voice')) {  // a message: pops up like a chat app, with who and what
       await bumpBadge();
-      return self.registration.showNotification(d.title, {
-        body: d.kind === 'voice' ? d.body + ' · แตะเพื่อฟัง' : d.body, tag: 'wormadi-' + (d.tag || 'dm'), renotify: true,
-        vibrate: [200, 100, 200], icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', data: { url: d.url },
-      });
+      return showFresh('wormadi-' + (d.tag || 'dm'), d.title, { body: d.kind === 'voice' ? d.body + ' · แตะเพื่อฟัง' : d.body, vibrate: [200, 100, 200], data: { url: d.url } });
     }
     // SOS (or the server could not be reached: treat it as urgent)
-    await self.registration.showNotification((d && d.kind === 'sos' && d.title) || '🚨 แจ้งเหตุฉุกเฉิน', {
-      body: (d && d.kind === 'sos' && d.body) || 'มีการแจ้งเตือนสำคัญ แตะเพื่อเปิดแอป', tag: 'wormadi-sos', renotify: true, requireInteraction: true,
-      vibrate: [700, 300, 700, 300, 700, 300, 700, 300, 700],
-      icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', data: { url: './#/sos' },
+    await showFresh('wormadi-sos', (d && d.kind === 'sos' && d.title) || '🚨 แจ้งเหตุฉุกเฉิน', {
+      body: (d && d.kind === 'sos' && d.body) || 'มีการแจ้งเตือนสำคัญ แตะเพื่อเปิดแอป', requireInteraction: true, vibrate: LONG_VIB, data: { url: './#/sos' },
     });
   })());
 });

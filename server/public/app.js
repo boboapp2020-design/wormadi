@@ -758,7 +758,7 @@ async function clearChatNotifs(onlyTag) {
   try {
     const reg = await navigator.serviceWorker.getRegistration(); if (!reg) return;
     for (const n of await reg.getNotifications()) {
-      const t = String(n.tag || '').replace(/^wormadi-/, '');
+      const t = String((n.data && n.data.group) || n.tag || '').replace(/^wormadi-/, '');
       if (onlyTag instanceof RegExp ? onlyTag.test(t) : /^(dm:|ch:)/.test(t) && (!onlyTag || t === onlyTag)) n.close();
     }
   } catch {}
@@ -977,6 +977,34 @@ function idb(fn) {
     o.onerror = () => res(null);
   });
 }
+/** the app is of little use if the SOS cannot ring: ask until notifications are allowed */
+function pushGate() {
+  if (pushState() !== 'off' || $('dlg')) return;
+  const denied = Notification.permission === 'denied';
+  const bg = document.createElement('div'); bg.className = 'dlg-bg'; bg.id = 'dlg';
+  bg.innerHTML = `<div class="dlg" role="alertdialog" aria-modal="true"><div class="dlg-ic danger">${icon('siren')}</div><h3>ต้องเปิดการแจ้งเตือน</h3>
+    <p>เพื่อให้ <b>เหตุฉุกเฉิน</b> และ <b>วอส่วนตัว</b> ดังถึงคุณ แม้ปิดแอปอยู่</p>
+    ${denied ? '<p style="color:var(--err-fg)">เครื่องนี้ปิดการแจ้งเตือนของแอปไว้<br>แตะรูปแม่กุญแจ/ตั้งค่าไซต์ในเบราว์เซอร์ → การแจ้งเตือน → อนุญาต แล้วเปิดแอปใหม่</p>' : ''}
+    <div class="dlg-btns">${denied ? '<button class="btn" type="button" id="pgLater">ใช้งานต่อก่อน</button>' : ''}<button class="btn primary" type="button" id="pgYes">${denied ? 'ลองอีกครั้ง' : 'อนุญาตการแจ้งเตือน'}</button></div></div>`;
+  ($('app') || document.body).appendChild(bg);
+  if ($('pgLater')) $('pgLater').onclick = () => bg.remove();
+  $('pgYes').onclick = async () => {
+    await enablePush(true);
+    bg.remove();
+    if (pushState() === 'on') { toast('เปิดการแจ้งเตือนแล้ว'); if (S.route === 'home') render(); } else setTimeout(pushGate, 300);
+  };
+}
+/** leads / admins: who can be reached while their app is closed */
+async function pushStatusSheet() {
+  sheet('<div class="empty">กำลังโหลด…</div>');
+  let list; try { list = await api('/api/push/status'); } catch (e) { closeSheet(); return toast(e.message); }
+  const used = list.filter(u => u.used), ok = used.filter(u => u.push), no = used.filter(u => !u.push), never = list.filter(u => !u.used);
+  const li = (u, good) => `<div class="li"><span class="dot ${good ? 'on' : ''}"></span><div class="grow"><div class="t1">${esc(u.name)}</div><div class="t2">${esc(u.emp)}${u.dept ? ' · ' + esc(u.dept) : ''}</div></div><span class="small" style="color:${good ? 'var(--ok-fg)' : 'var(--err-fg)'}">${good ? 'ดังถึง' : 'ยังไม่เปิด'}</span></div>`;
+  sheet(`<h3>ใครรับแจ้งเตือนตอนปิดแอปได้</h3>
+    <p class="small muted" style="margin-top:0">คนที่เข้าใช้แล้ว ${used.length} คน · ดังถึง <b style="color:var(--ok-fg)">${ok.length}</b> · ยังไม่เปิด <b style="color:var(--err-fg)">${no.length}</b> · ยังไม่เคยเข้าใช้ ${never.length} คน</p>
+    ${no.length ? `<div class="sec">ยังไม่เปิดการแจ้งเตือน (ฉุกเฉินจะไม่ดังเมื่อปิดแอป)</div><div class="list">${no.map(u => li(u, false)).join('')}</div>` : ''}
+    ${ok.length ? `<div class="sec" style="margin-top:10px">เปิดแล้ว</div><div class="list">${ok.map(u => li(u, true)).join('')}</div>` : ''}`);
+}
 const saveAuthForSw = () => idb(st => st.put({ token: S.token || '', base: serverBase || location.origin + location.pathname.replace(/[^/]*$/, '').replace(/\/$/, '') }, 'auth')).catch(() => {});
 const pushSupported = () => !NATIVE && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
 function pushState() {
@@ -1093,6 +1121,7 @@ ROUTES.home = () => {
     $('chatIb').onclick = () => go('convos');
     $('bell').onclick = () => go('notifications');
     $('homeAv').onclick = () => (S.user ? changeAvatar() : go('profile'));
+    if (pushState() === 'off' && !S.pushGateShown) { S.pushGateShown = true; setTimeout(pushGate, 600); }
     if ($('pushAsk')) $('pushAsk').onclick = async () => { await enablePush(true); if (Notification.permission === 'denied') toast('การแจ้งเตือนถูกปิดในเบราว์เซอร์: เปิดได้ที่ การตั้งค่าเว็บไซต์ > การแจ้งเตือน'); render(); };
     bindInstallBar(root);
     setConn(S.conn); renderBadges();
@@ -1118,7 +1147,7 @@ ROUTES.ptt = () => {
     </div>
     <div class="pttstatus" id="pttStatus" aria-live="polite"></div>
     <div style="display:flex;justify-content:center;gap:10px;margin:0 0 10px">
-      ${ch && ch.dm && S.call && S.call.status === 'ringing' && S.call.offline ? `<div class="small" style="flex-basis:100%;text-align:center;padding:6px 10px;border-radius:12px;background:var(--primary-soft);color:var(--primary-fg)">${S.call.noAnswer ? 'ยังไม่ตอบ' : S.call.pushOk === false ? 'แอปของเขาปิดอยู่ · ส่งแจ้งเตือนไม่ถึงเครื่องเขา' : `กำลังเรียก… แอปของเขาปิดอยู่ · ส่งแจ้งเตือนแล้ว ${S.call.tries || 1}/6 ครั้ง`}<br>เมื่อเขาเปิดแอป สายจะต่อเองทันที</div>` : ''}
+      ${ch && ch.dm && S.call && S.call.status === 'ringing' && S.call.offline ? `<div class="small" style="flex-basis:100%;text-align:center;padding:6px 10px;border-radius:12px;background:var(--primary-soft);color:var(--primary-fg)">${S.call.noAnswer ? 'ยังไม่ตอบ' : S.call.pushOk === false ? 'แอปของเขาปิดอยู่ · ส่งแจ้งเตือนไม่ถึงเครื่องเขา' : `กำลังเรียก… แอปของเขาปิดอยู่ · ส่งแจ้งเตือนแล้ว ${S.call.tries || 1}/12 ครั้ง`}<br>เมื่อเขาเปิดแอป สายจะต่อเองทันที</div>` : ''}
       ${ch && ch.dm ? `<button class="btn sm" id="hangUp" type="button" style="background:#cf2020;color:#fff;border-color:#cf2020">${icon('x')}วางสาย</button>` : ''}
       <button class="btn sm" id="toChat" type="button">${icon('chat')}พิมพ์ / ฟังย้อนหลัง</button>
       ${ch && ch.id ? `<button class="btn sm" id="shareRoom" type="button">${icon('send')}แชร์ห้อง</button>` : ''}</div>
@@ -1292,12 +1321,12 @@ function startCall(u) {
   clearInterval(callTimer); let tries = 1;
   callTimer = setInterval(() => {
     if (!S.call || S.call.status !== 'ringing' || S.call.peer.id !== u.id) return clearInterval(callTimer);
-    if (tries >= 6) {
+    if (tries >= 12) {
       clearInterval(callTimer); S.call.noAnswer = true; if (S.route === 'ptt') render();
       return ask(`${u.name} ยังไม่ตอบ\nฝากข้อความเสียงไว้ไหม? เขาจะได้ฟังเมื่อเปิดแอป`, { title: 'ไม่ตอบ', yes: 'ฝากเสียง', no: 'ปิด', icon: 'mic' }).then(ok => { endCall(); if (ok) voiceMsgSheet(u); });
     }
     tries++; S.call.tries = tries; sendMsg({ type: 'call', to: u.id }); if (S.route === 'ptt') render();
-  }, 20000);
+  }, 10000);
 }
 let callTimer = null;
 function endCall() {
@@ -1661,7 +1690,7 @@ async function checkVoicemail(fresh) {
 /** what was said in my rooms while my app was closed: listen now, one after another */
 async function checkMissedTalks() {
   if (!ACC() || !S.user || !S.config.recording) return;
-  clearChatNotifs(/^(talk:|call$)/);                       // I am here now: stop the ringing notifications
+  clearChatNotifs(/^(talk:|call$|sos$|info$)/);                       // I am here now: stop the ringing notifications
   let list; try { list = await api('/api/missed-talks'); } catch { return; }
   api('/api/missed-talks/seen', { method: 'POST', body: {} }).catch(() => {});
   if (!list.length) return;
@@ -2560,6 +2589,7 @@ ROUTES.settings = () => {
       ${row('sInvite', 'qr', 'เชิญเพื่อนร่วมทีม', 'แสดง QR ให้สแกนเปิดแอป')}
       ${row('sMembers', 'team', 'สมาชิกทีมงาน')}
       ${lead ? row('sReport', 'chart', 'รายงานการใช้งาน') : ''}
+      ${lead ? row('sPushSt', 'siren', 'ใครรับแจ้งเตือนฉุกเฉินได้', 'ดูว่าเครื่องใครยังไม่เปิดการแจ้งเตือน') : ''}
       ${lead ? row('sLog', 'download', 'Log ละเอียด / ส่งออก CSV', 'ประวัติว่าใครพูด/พิมพ์ที่ไหนเมื่อไร · CSV = ไฟล์เปิดใน Excel') : ''}
       ${admin ? row('sAdmin', 'settings', 'จัดการระบบ (ผู้ดูแล)', 'เพิ่ม/ลบสมาชิก กลุ่ม สิทธิ์ ประกาศ') : ''}
     </div>
@@ -2580,7 +2610,7 @@ ROUTES.settings = () => {
     on('sTheme', () => { applyTheme(curTheme() === 'dark' ? 'light' : 'dark', true); render(); });
     on('sInstall', doInstall); on('sBatt', () => WN.openBatterySettings());
     on('sInvite', invite); on('sMembers', () => ACC() ? go('members') : toast('ใช้ได้เมื่อใช้เซิร์ฟเวอร์ Cloudflare'));
-    on('sReport', () => go('report')); on('sLog', () => { location.href = (serverBase || '') + '/log.html'; }); on('sAdmin', () => go('admin'));
+    on('sReport', () => go('report')); on('sPushSt', pushStatusSheet); on('sLog', () => { location.href = (serverBase || '') + '/log.html'; }); on('sAdmin', () => go('admin'));
     on('sApk', () => { location.href = APK_URL; });
     const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); if (ACC() && S.token) api('/api/me', { method: 'PATCH', body: { room_push: k.checked } }).catch(() => {}); toast(k.checked ? 'ได้ยินตลอดเวลา: เปิด' : 'ได้ยินตลอดเวลา: ปิด (เหตุฉุกเฉินยังดังตามปกติ)'); };
     on('sGames', () => go('games')); on('sNotes', () => go('tasks')); on('sCodes', radioCodes); on('sHelp', help); on('sAbout', about);
