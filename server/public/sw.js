@@ -1,6 +1,6 @@
 // Service worker: ให้ติดตั้งเป็นแอปได้ เปิดหน้าแอปได้แม้เน็ตแกว่ง และกดแจ้งเตือนแล้วกลับเข้าแอป
 // หน้าเว็บ: ลองเน็ตก่อน (ได้เวอร์ชันใหม่เสมอ) ถ้าไม่มีเน็ตใช้ของที่เก็บไว้ · /api และ WebSocket ไม่ผ่าน cache
-const CACHE = 'wormadi-v44';
+const CACHE = 'wormadi-v45';
 // (index.html / log.html are cached when visited: Cloudflare redirects *.html to clean URLs)
 const SHELL = ['./', 'theme.css', 'app.css', 'app.js', 'manifest.webmanifest', 'vendor/qrcode.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-180.png', 'brand/logo.png', 'brand/app-icon.png', 'brand/wordmark.png'];
@@ -57,6 +57,12 @@ self.addEventListener('push', e => {
       const r = await fetch(auth.base + '/api/push/latest', { headers: { Authorization: 'Bearer ' + auth.token }, cache: 'no-store' });
       if (r.ok) d = await r.json();
     } catch {}
+    if (d && d.kind === 'call') {                        // someone is calling me on the private walkie: ring until I open the app
+      return self.registration.showNotification(d.title, {
+        body: d.body, tag: 'wormadi-call', renotify: true, requireInteraction: true,
+        vibrate: [600, 200, 600, 200, 600, 200, 600], icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', data: { url: d.url },
+      });
+    }
     if (d && (d.kind === 'dm' || d.kind === 'voice')) {
       await bumpBadge();
       return self.registration.showNotification(d.title, {

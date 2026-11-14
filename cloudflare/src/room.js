@@ -174,7 +174,7 @@ export class WalkieRoom extends DurableObject {
       const lobby = room === LOBBY;
       if (!lobby && !ch) return;
       const { results } = await db.prepare(
-        `SELECT DISTINCT p.user_id FROM push_subs p JOIN users u ON u.id = p.user_id AND u.active = 1
+        `SELECT DISTINCT p.user_id FROM push_subs p JOIN users u ON u.id = p.user_id AND u.active = 1 AND COALESCE(u.room_push, 1) = 1
          WHERE p.user_id != ?1 AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = p.user_id AND n.ref = ?2 AND n.ts > ?3)
            AND (?4 = 1 OR u.main_channel = ?5 OR p.user_id IN (SELECT user_id FROM channel_access WHERE channel_id = ?5)
                 OR (?6 = 0 AND p.user_id IN (SELECT user_id FROM messages WHERE channel = ?7 AND ts > ?8 AND user_id IS NOT NULL)))
@@ -231,6 +231,34 @@ export class WalkieRoom extends DurableObject {
       } catch (e) { console.error('recording save failed', e); }
     }
     this.publish(ch, msg);
+    if (msg.audio) this.ctx.waitUntil(this.pushRoomTalk(ch, t, msg));
+  }
+
+  async wentOffline(ws) {
+    try {
+      const c = this.info(ws);
+      if (!c || !c.uid || !this.env.DB) return;
+      if (this.authed().some(o => o !== ws && this.info(o).uid === c.uid)) return;      // still on another screen
+      await this.env.DB.prepare("INSERT INTO chat_reads (user_id, channel, ts) VALUES (?, '#talk', ?) ON CONFLICT(user_id, channel) DO UPDATE SET ts = excluded.ts").bind(c.uid, Date.now()).run();
+    } catch {}
+  }
+  /** someone talked in a room: members whose app is closed get a push (at most one per person per room a minute); they can listen when they open the app */
+  async pushRoomTalk(room, t, m) {
+    try {
+      const db = this.env.DB; if (!db || room.startsWith('dm:')) return;
+      const online = new Set(); for (const ws of this.authed()) { const c = this.info(ws); if (c.uid) online.add(c.uid); }
+      const now = Date.now(), ref = 'talk:' + room;
+      const { results } = await db.prepare(
+        `SELECT DISTINCT p.user_id FROM push_subs p JOIN users u ON u.id = p.user_id AND u.active = 1 AND COALESCE(u.room_push, 1) = 1
+           JOIN room_since s ON s.user_id = p.user_id AND s.channel = ?1
+         WHERE p.user_id != ?2 AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = p.user_id AND n.ref = ?3 AND n.ts > ?4)`)
+        .bind(room, t.uid || 0, ref, now - 60_000).all();
+      const ids = results.map(r => r.user_id).filter(id => !online.has(id));
+      if (!ids.length) return;
+      const title = `🎙 ${t.name} วอในห้อง ${room}`, body = `พูด ${Math.max(1, Math.round((m.ms || 0) / 1000))} วินาที · แตะเพื่อเปิดฟัง`;
+      await db.batch(ids.map(id => db.prepare("INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, ?, 'room', ?, ?, ?)").bind(now, id, title, body, ref)));
+      await pushTo(this.env, ids);
+    } catch (e) { console.error('talk push', e); }
   }
 
   /** leave every room (disconnect / old "leave") */
@@ -368,6 +396,10 @@ export class WalkieRoom extends DurableObject {
           } catch {}
         }
         this.send(ws, { type: 'joined', id: uid ?? now.cid, name, channel: ch, rooms, channels: this.channels, uid: devUid, emojis: EMOJIS });
+        if (uid && this.pages && this.pages.has(uid)) {
+          const pg = this.pages.get(uid); this.pages.delete(uid);
+          if (Date.now() - pg.ts < 180_000 && this.authed().some(o => this.info(o).uid === pg.from.id)) this.send(ws, { type: 'call', from: pg.from, channel: pg.channel });
+        }
         for (const r of rooms) {
           if (!before.includes(r)) { this.broadcastState(r); this.log('join', r, name); }
           else if (r === ch) this.broadcastState(r);
@@ -472,9 +504,22 @@ export class WalkieRoom extends DurableObject {
         const to = Number(msg.to);
         if (!me.uid || !to || to === me.uid) return;
         const targets = this.authed().filter(o => this.info(o).uid === to);
-        if (!targets.length) return this.send(ws, { type: 'call_fail', to, reason: 'offline', message: 'ผู้ใช้นี้ไม่ได้ออนไลน์อยู่' });
         const channel = `dm:${Math.min(me.uid, to)}:${Math.max(me.uid, to)}`;
         const from = { id: me.uid, name: me.name, dept: me.dept };
+        if (!targets.length) {                   // app closed: ring their phone with a push (the caller's app repeats this every 20 s)
+          if (!this.env.DB || !(await this.env.DB.prepare('SELECT 1 FROM users WHERE id = ? AND active = 1').bind(to).first())) return this.send(ws, { type: 'call_fail', to, reason: 'offline', message: 'ไม่พบผู้ใช้นี้' });
+          const now = Date.now(); this.pages = this.pages || new Map();
+          const prev = this.pages.get(to), fresh = !prev || prev.from.id !== me.uid || now - (prev.pushAt || 0) > 15_000;
+          const page = { from, channel, ts: now, pushAt: fresh ? now : prev.pushAt }; this.pages.set(to, page);
+          let r = { sent: 0, ready: false };
+          if (fresh && this.env.DB) {
+            try {
+              await this.env.DB.prepare("INSERT INTO notifications (ts, user_id, kind, title, body, ref) VALUES (?, ?, 'call', ?, ?, ?)").bind(now, to, `📻 ${me.name} วอส่วนตัวหาคุณ`, 'แตะเพื่อเปิดแอป แล้วคุยได้เลย', 'call:' + me.uid).run();
+              r = await pushTo(this.env, [to]);
+            } catch (e) { console.error('call push', e); }
+          }
+          return this.send(ws, { type: 'call_ringing', to, channel, offline: true, pushed: fresh, sent: (r && r.sent) || 0, ready: !!(r && r.ready) });
+        }
         for (const o of targets) this.send(o, { type: 'call', from, channel });
         this.send(ws, { type: 'call_ringing', to, channel });
         break;
@@ -526,11 +571,13 @@ export class WalkieRoom extends DurableObject {
   }
 
   async webSocketClose(ws, code) {
+    await this.wentOffline(ws);
     this.leave(ws);
     try { ws.close(code === 1005 ? 1000 : code, 'bye'); } catch {}
   }
 
   async webSocketError(ws) {
+    await this.wentOffline(ws);
     this.leave(ws);
   }
 

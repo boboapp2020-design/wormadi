@@ -182,6 +182,7 @@ async function refreshMe() {
   try {
     const d = await api('/api/me');
     S.user = d.user; S.unread = d.unread; S.openTasks = d.openTasks;
+    if (d.roomPush !== undefined && d.roomPush !== keepOn() && !S.pushSynced) { S.pushSynced = true; api('/api/me', { method: 'PATCH', body: { room_push: keepOn() } }).catch(() => {}); }   // this phone's switch decides
     if (d.chatUnread) {                                           // the server counts unread chats (also those that arrived while the app was closed)
       S.dmUnread = {}; S.grpUnread = {};
       for (const [ch, n] of Object.entries(d.chatUnread)) (isDm(ch) ? S.dmUnread : S.grpUnread)[ch] = n;
@@ -420,7 +421,7 @@ function onMessage(m) {
       if (changed) { S.chat.loadedFor = null; if (S.route === 'chat') renderChat(); }
       if (m.channel) markChannelRead(m.channel);
       if (S.route === 'ptt' || S.route === 'home') render();
-      if (!S.vmAsked && ACC() && S.user) { S.vmAsked = true; setTimeout(() => checkVoicemail(), 800); }
+      if (!S.vmAsked && ACC() && S.user) { S.vmAsked = true; setTimeout(() => checkVoicemail(), 800); setTimeout(() => checkMissedTalks(), 1600); }
       if (!keepAudio && !NATIVE) setKeepAlive(true, true);          // keeps the page alive in the background (SOS)
       if (!NATIVE && wakeOn()) setWake(true);
       renderUnlock();
@@ -525,7 +526,14 @@ function onMessage(m) {
     case 'invite_done': if (m.accept) loadChannels().then(() => enterRoom(m.channel, 'ptt', { confirmed: true })); else toast('ปฏิเสธคำเชิญแล้ว'); break;
     case 'invite_answer': toast(`${m.name} ${m.accept ? 'เข้ากลุ่ม' : 'ปฏิเสธคำเชิญ'} "${m.channel}"`); break;
     case 'invite_sent': toast(m.online ? `ส่งคำเชิญเข้ากลุ่ม "${m.channel}" แล้ว` : `ส่งคำเชิญแล้ว จะเห็นเมื่อเข้าแอป`); break;
-    case 'call_ringing': toast(`กำลังต่อสาย ${S.call?.peer?.name || ''}…`); break;
+    case 'call_ringing':
+      if (!S.call) break;
+      if (m.offline) {
+        const first = !S.call.offline; S.call.offline = true; S.call.pushOk = m.ready && (m.sent > 0 || !m.pushed);
+        if (first) toast(!m.ready ? 'แอปของเขาปิดอยู่ และระบบแจ้งเตือนยังไม่เปิดใช้งาน' : m.sent ? `แอปของ ${S.call.peer.name} ปิดอยู่ · ส่งแจ้งเตือนเรียกแล้ว` : `แอปของ ${S.call.peer.name} ปิดอยู่ และเครื่องเขายังไม่ได้เปิดรับแจ้งเตือน`);
+        if (S.route === 'ptt') render();
+      } else toast(`กำลังต่อสาย ${S.call.peer.name || ''}…`);
+      break;
     case 'call_fail': toast(m.message || 'เรียกไม่สำเร็จ'); endCall(); break;
     case 'call_reply':
       if (!S.call || S.call.peer.id !== m.from.id) break;
@@ -751,7 +759,7 @@ async function clearChatNotifs(onlyTag) {
     const reg = await navigator.serviceWorker.getRegistration(); if (!reg) return;
     for (const n of await reg.getNotifications()) {
       const t = String(n.tag || '').replace(/^wormadi-/, '');
-      if (/^(dm:|ch:)/.test(t) && (!onlyTag || t === onlyTag)) n.close();
+      if (onlyTag instanceof RegExp ? onlyTag.test(t) : /^(dm:|ch:)/.test(t) && (!onlyTag || t === onlyTag)) n.close();
     }
   } catch {}
 }
@@ -1110,6 +1118,7 @@ ROUTES.ptt = () => {
     </div>
     <div class="pttstatus" id="pttStatus" aria-live="polite"></div>
     <div style="display:flex;justify-content:center;gap:10px;margin:0 0 10px">
+      ${ch && ch.dm && S.call && S.call.status === 'ringing' && S.call.offline ? `<div class="small" style="flex-basis:100%;text-align:center;padding:6px 10px;border-radius:12px;background:var(--primary-soft);color:var(--primary-fg)">${S.call.noAnswer ? 'ยังไม่ตอบ' : S.call.pushOk === false ? 'แอปของเขาปิดอยู่ · ส่งแจ้งเตือนไม่ถึงเครื่องเขา' : `กำลังเรียก… แอปของเขาปิดอยู่ · ส่งแจ้งเตือนแล้ว ${S.call.tries || 1}/6 ครั้ง`}<br>เมื่อเขาเปิดแอป สายจะต่อเองทันที</div>` : ''}
       ${ch && ch.dm ? `<button class="btn sm" id="hangUp" type="button" style="background:#cf2020;color:#fff;border-color:#cf2020">${icon('x')}วางสาย</button>` : ''}
       <button class="btn sm" id="toChat" type="button">${icon('chat')}พิมพ์ / ฟังย้อนหลัง</button>
       ${ch && ch.id ? `<button class="btn sm" id="shareRoom" type="button">${icon('send')}แชร์ห้อง</button>` : ''}</div>
@@ -1280,9 +1289,19 @@ function startCall(u) {
   sendMsg({ type: 'call', to: u.id });
   joinNow(S.call.channel);
   go('ptt');
+  clearInterval(callTimer); let tries = 1;
+  callTimer = setInterval(() => {
+    if (!S.call || S.call.status !== 'ringing' || S.call.peer.id !== u.id) return clearInterval(callTimer);
+    if (tries >= 6) {
+      clearInterval(callTimer); S.call.noAnswer = true; if (S.route === 'ptt') render();
+      return ask(`${u.name} ยังไม่ตอบ\nฝากข้อความเสียงไว้ไหม? เขาจะได้ฟังเมื่อเปิดแอป`, { title: 'ไม่ตอบ', yes: 'ฝากเสียง', no: 'ปิด', icon: 'mic' }).then(ok => { endCall(); if (ok) voiceMsgSheet(u); });
+    }
+    tries++; S.call.tries = tries; sendMsg({ type: 'call', to: u.id }); if (S.route === 'ptt') render();
+  }, 20000);
 }
+let callTimer = null;
 function endCall() {
-  const c = S.call; S.call = null; stopRing();
+  const c = S.call; S.call = null; stopRing(); clearInterval(callTimer);
   if (S.me && isDm(S.me.channel)) { stopTalking(true); joinNow((c && c.prev) || lsGet('walkie_channel') || undefined); }
   if (['ptt', 'chat', 'home'].includes(S.route)) render();
 }
@@ -1639,6 +1658,34 @@ async function checkVoicemail(fresh) {
   S.vmPop = list;
   showVmPop();
 }
+/** what was said in my rooms while my app was closed: listen now, one after another */
+async function checkMissedTalks() {
+  if (!ACC() || !S.user || !S.config.recording) return;
+  clearChatNotifs(/^(talk:|call$)/);                       // I am here now: stop the ringing notifications
+  let list; try { list = await api('/api/missed-talks'); } catch { return; }
+  api('/api/missed-talks/seen', { method: 'POST', body: {} }).catch(() => {});
+  if (!list.length) return;
+  if ($('sheet')) return toast(`🎙 มีเสียงวอที่คุณพลาด ${list.length} ข้อความ · ดูได้ในแชทของห้อง`);
+  if (!NATIVE) beep(740, 0.1); vibrate([60, 40, 60]);
+  sheet(`<div id="mtPop"><h3>🎙 เสียงวอที่คุณพลาด ${list.length} ข้อความ</h3>
+    <p class="small muted" style="margin-top:0">มีคนวอในห้องของคุณตอนที่แอปปิดอยู่</p>
+    <div class="vmlist">${list.map(v => `<div class="vmitem"><div class="grow"><b>${esc(v.name)}</b><div class="small muted">${esc(v.channel)} · ${fmtTime(v.ts)} น.</div></div>${voiceHtml(v)}</div>`).join('')}</div>
+    <button class="btn primary" type="button" id="mtNow">${icon('play')}ฟังทั้งหมด</button>
+    <button class="btn" type="button" id="mtLater" style="margin-top:10px">ปิด</button>
+    <p class="small muted" style="text-align:center">ฟังย้อนหลังได้ในแชทของห้อง · ปิดการแจ้งเตือนนี้ได้ที่ ตั้งค่า → ได้ยินตลอดเวลา</p></div>`, bg => {
+    bg.querySelector('#mtLater').onclick = closeSheet;
+    bg.querySelector('#mtNow').onclick = async () => {
+      bg.querySelector('#mtNow').disabled = true;
+      for (const btn of $$('[data-play]', bg)) {
+        if (!bg.isConnected) return;
+        btn.closest('.vmitem').classList.add('playing');
+        await new Promise(res => { playRecording(btn).then(() => { if (!player || player.btn !== btn) return res(); player.audio.addEventListener('ended', res); player.audio.addEventListener('pause', res); }); });
+        btn.closest('.vmitem').classList.remove('playing');
+      }
+      if (bg.isConnected) bg.querySelector('#mtNow').disabled = false;
+    };
+  });
+}
 function showVmPop() {
   const list = S.vmPop;
   if (!list || !list.length || ['splash', 'login', 'setpw'].includes(S.route)) return;
@@ -1672,10 +1719,10 @@ function userSheet(u) {
   sheet(`<div class="usheet"><div class="prof">${avatar(u, 'av')}<h2>${esc(u.name)}</h2><div class="muted">รหัสพนักงาน : ${esc(u.emp)}</div>
     <div style="color:${u.online ? 'var(--ok-fg)' : 'var(--muted)'};margin-top:4px"><span class="dot ${u.online ? 'on' : ''}"></span> ${u.online ? 'ออนไลน์' + (u.channel ? ' · ' + esc(u.channel) : '') : 'ออฟไลน์'}</div></div>
     <div class="list kv kv2">${kv('building', 'แผนก', u.dept)}${kv('brief', 'ตำแหน่ง', u.position)}${kv('antenna', 'ช่องหลัก', u.main_channel_name)}${kv('shield', 'สิทธิ์การใช้งาน', ROLE_NAME[u.role])}</div>
-    ${u.online && S.user && u.id !== S.user.id ? `<button class="btn primary" id="callU">${icon('walkie')}วอหาส่วนตัว</button>` : ''}
+    ${S.user && u.id !== S.user.id ? `<button class="btn primary" id="callU">${icon('walkie')}วอหาส่วนตัว</button>${u.online ? '' : '<p class="small muted" style="text-align:center">แอปของเขาปิดอยู่ · ระบบจะส่งแจ้งเตือนเรียกให้เปิดแอป</p>'}` : ''}
     ${S.user && u.id !== S.user.id ? `<div class="btnrow"><button class="btn" id="dmU">${icon('chat')}แชทส่วนตัว</button><button class="btn" id="invU">${icon('plus')}เชิญเข้ากลุ่ม</button></div><button class="btn" id="gameU" type="button">${icon('game')}ชวนเล่นเกม</button>` : ''}
     ${u.online && u.channel && u.channel !== 'คุยส่วนตัว' ? `<button class="btn" id="joinU" style="margin-top:10px">${icon('mic')}ไปห้อง ${esc(u.channel)}</button>` : ''}
-    ${!u.online && S.user && u.id !== S.user.id ? `<button class="btn primary" id="vmU" style="margin-top:10px">${icon('mic')}ฝากข้อความเสียง</button><p class="small muted" style="text-align:center">ไม่ได้ออนไลน์ · ฝากเสียงไว้ เขาจะได้รับแจ้งเมื่อกลับมาออนไลน์</p>` : ''}</div>`, bg => {
+    ${!u.online && S.user && u.id !== S.user.id ? `<button class="btn" id="vmU" style="margin-top:10px">${icon('mic')}ฝากข้อความเสียง</button><p class="small muted" style="text-align:center">ไม่ได้ออนไลน์ · ฝากเสียงไว้ เขาจะได้รับแจ้งเมื่อกลับมาออนไลน์</p>` : ''}</div>`, bg => {
     const vm = bg.querySelector('#vmU'); if (vm) vm.onclick = () => voiceMsgSheet(u);
     const j = bg.querySelector('#joinU'); if (j) j.onclick = () => { closeSheet(); enterRoom(u.channel, 'ptt'); };
     const cu = bg.querySelector('#callU'); if (cu) cu.onclick = () => { closeSheet(); startCall(u); };
@@ -2505,7 +2552,7 @@ ROUTES.settings = () => {
       ${row('sTheme', curTheme() === 'dark' ? 'moon' : 'sun', 'ธีม', '', `<span class="small muted">${curTheme() === 'dark' ? 'กลางคืน (มืด)' : 'ภาคสนาม (สว่าง)'}</span>`)}
       <label class="setrow web-only">${icon('sun', 'i lead')}<div class="grow"><b>ให้จอติดค้างไว้</b><small>จอไม่ดับขณะเปิดแอป จะได้ยินเสียงแน่นอนที่สุด (กินแบตเพิ่ม)</small></div><input type="checkbox" class="sw" id="optWake" ${wakeOn() ? 'checked' : ''}></label>
       <div class="setrow" style="background:color-mix(in srgb, #cf2020 8%, transparent)">${icon('siren', 'i lead')}<div class="grow"><b>เหตุฉุกเฉิน (SOS) ดังเสมอ</b><small>ดังเสมอเมื่อเข้าสู่ระบบ${pushState() === 'off' ? ' · <b style="color:var(--err-fg)">ยังไม่ได้อนุญาตการแจ้งเตือน</b>' : ''}</small></div>${pushState() === 'off' ? '<button class="btn sm primary" id="sPush" type="button">อนุญาต</button>' : '<span class="small muted">เปิดอยู่</span>'}</div>
-      <label class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินตลอดเวลา</b><small>${NATIVE ? 'แม้พับหรือปิดแอป · ปิดสวิตช์ = เงียบเมื่อออกจากหน้าแอป' : IOS ? 'เมื่อพับแอป (iPhone อาจหยุดเมื่อพับนาน) · ปิดสวิตช์ = เงียบเมื่อพับแอป' : 'เมื่อพับแอปหรือปิดจอ · ถ้าปัดปิดแอปทิ้ง ต้องใช้แอป Android · ปิดสวิตช์ = เงียบเมื่อพับแอป'}</small></div><input type="checkbox" class="sw" id="optKeep" ${keepOn() ? 'checked' : ''}></label>
+      <label class="setrow">${icon('volume', 'i lead')}<div class="grow"><b>ได้ยินตลอดเวลา</b><small>ปิดแอปอยู่ก็ได้แจ้งเตือนเมื่อห้องของคุณมีคนวอ · ${NATIVE ? 'แม้พับหรือปิดแอป · ปิดสวิตช์ = เงียบเมื่อออกจากหน้าแอป' : IOS ? 'เมื่อพับแอป (iPhone อาจหยุดเมื่อพับนาน) · ปิดสวิตช์ = เงียบเมื่อพับแอป' : 'เมื่อพับแอปหรือปิดจอ · ถ้าปัดปิดแอปทิ้ง ต้องใช้แอป Android · ปิดสวิตช์ = เงียบเมื่อพับแอป'}</small></div><input type="checkbox" class="sw" id="optKeep" ${keepOn() ? 'checked' : ''}></label>
       ${!NATIVE && !standalone() ? row('sInstall', 'download', 'ติดตั้งแอปลงหน้าจอ', installEvt ? 'แตะเพื่อติดตั้ง ใช้งานเต็มจอเหมือนแอป' : IOS ? 'Safari: ปุ่มแชร์ > เพิ่มไปยังหน้าจอโฮม' : 'แตะเพื่อดูวิธีติดตั้ง') : ''}
       ${NATIVE ? row('sBatt', 'battery', 'ให้แอปทำงานตอนจอดับ', 'ปิดการประหยัดแบตเตอรี่') : ''}
     </div>
@@ -2535,7 +2582,7 @@ ROUTES.settings = () => {
     on('sInvite', invite); on('sMembers', () => ACC() ? go('members') : toast('ใช้ได้เมื่อใช้เซิร์ฟเวอร์ Cloudflare'));
     on('sReport', () => go('report')); on('sLog', () => { location.href = (serverBase || '') + '/log.html'; }); on('sAdmin', () => go('admin'));
     on('sApk', () => { location.href = APK_URL; });
-    const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); toast(k.checked ? 'ได้ยินตลอดเวลา: เปิด' : 'ได้ยินตลอดเวลา: ปิด (เหตุฉุกเฉินยังดังตามปกติ)'); };
+    const k = $('optKeep'); if (k) k.onchange = () => { lsSet('walkie_keep', k.checked ? '1' : '0'); if (ACC() && S.token) api('/api/me', { method: 'PATCH', body: { room_push: k.checked } }).catch(() => {}); toast(k.checked ? 'ได้ยินตลอดเวลา: เปิด' : 'ได้ยินตลอดเวลา: ปิด (เหตุฉุกเฉินยังดังตามปกติ)'); };
     on('sGames', () => go('games')); on('sNotes', () => go('tasks')); on('sCodes', radioCodes); on('sHelp', help); on('sAbout', about);
     on('sOut', async () => { if (await ask('ออกจากระบบ?', { title: 'ออกจากระบบ', yes: 'ออกจากระบบ' })) signOut(); });
     const w = $('optWake'); if (w) w.onchange = () => { lsSet('walkie_wake', w.checked ? '1' : '0'); setWake(w.checked); };

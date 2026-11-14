@@ -651,6 +651,27 @@ test('ข้อความที่ยังไม่ได้อ่าน: น
   assert.equal((await call('POST', '/api/chat/read', T['แชทC'], { channel: ch })).status, 400, 'คนนอกห้องส่วนตัวไม่ได้');
 });
 
+test('วอส่วนตัวหาคนที่ปิดแอป: ไม่ล้มเหลว แต่ส่งแจ้งเตือนเรียก · เปิดแอปแล้วสายต่อเอง · ปิดแจ้งเตือนห้องได้เอง', async () => {
+  const me = tk => call('GET', '/api/me', tk);
+  const ic = (await me(T['แชทC'])).body.user.id, ia = (await me(T['แชทA'])).body.user.id;
+  const a = await client(T['แชทA']);
+  a.send(JSON.stringify({ type: 'call', to: ic }));                                 // C ไม่ได้ต่ออยู่
+  const ring = await a.wait('call_ringing');
+  assert.equal(ring.offline, true, 'แจ้งว่าแอปของเขาปิดอยู่ (ไม่ใช่ call_fail)');
+  const latest = (await call('GET', '/api/push/latest', T['แชทC'])).body;
+  assert.equal(latest.kind, 'call', JSON.stringify(latest)); assert.ok(latest.title.includes('วอส่วนตัว'));
+  const c = await client(T['แชทC']);                                                 // C เปิดแอป
+  const inc = await c.wait('call');
+  assert.equal(inc.from.id, ia, 'เปิดแอปแล้วได้รับสายทันที');
+  a.close(); c.close();
+  assert.equal((await me(T['แชทC'])).body.roomPush, true, 'ค่าเริ่มต้น = เปิด');
+  await call('PATCH', '/api/me', T['แชทC'], { room_push: false });
+  assert.equal((await me(T['แชทC'])).body.roomPush, false, 'ปิดเองได้');
+  await call('PATCH', '/api/me', T['แชทC'], { room_push: true });
+  assert.ok(Array.isArray((await call('GET', '/api/missed-talks', T['แชทC'])).body));
+  assert.equal((await call('POST', '/api/missed-talks/seen', T['แชทC'], {})).status, 200);
+});
+
 (async () => {
   let fail = 0;
   for (const [n, f] of tests) {

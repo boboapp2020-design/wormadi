@@ -70,7 +70,7 @@ export default {
     await cleanChat(env);
     const day = 86_400_000, now = Date.now();
     await env.DB.prepare('DELETE FROM reminders WHERE done_at IS NOT NULL AND done_at < ?').bind(now - 30 * day).run();
-    await env.DB.prepare('DELETE FROM chat_reads WHERE channel != \'*\' AND ts < ?').bind(now - 3 * day).run();
+    await env.DB.prepare('DELETE FROM chat_reads WHERE channel NOT IN (\'*\', \'#talk\') AND ts < ?').bind(now - 3 * day).run();
     await env.DB.prepare('DELETE FROM games WHERE updated < ?').bind(now - 3 * day).run();   // duel games keep 3 days
     await env.DB.batch([   // incident board keeps 7 days
       env.DB.prepare('DELETE FROM incident_comments WHERE incident_id IN (SELECT id FROM incidents WHERE ts < ?)').bind(now - 7 * day),
@@ -272,10 +272,12 @@ async function api(req, env, url) {
     const unread = await db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE (user_id IS NULL OR user_id = ?) AND ts > ?').bind(me.id, lr).first('n');
     const tasks = await db.prepare('SELECT COUNT(*) AS n FROM reminders WHERE user_id = ? AND done_at IS NULL AND next_at IS NOT NULL AND next_at < ?').bind(me.id, Date.now() + 86_400_000).first('n');
     const ch = me.main_channel ? await db.prepare('SELECT name FROM channels WHERE id = ?').bind(me.main_channel).first('name') : null;
-    return json({ user: { ...me, main_channel_name: ch }, unread, openTasks: tasks, chatUnread: await chatUnread(db, me) });
+    const roomPush = (await db.prepare('SELECT room_push FROM users WHERE id = ?').bind(me.id).first('room_push')) !== 0;
+    return json({ user: { ...me, main_channel_name: ch }, unread, openTasks: tasks, chatUnread: await chatUnread(db, me), roomPush });
   }
   if (p === '/api/me' && m === 'PATCH') {
     const b = await readJson(req);
+    if ('room_push' in b) await db.prepare('UPDATE users SET room_push = ? WHERE id = ?').bind(b.room_push ? 1 : 0, me.id).run();
     if ('avatar' in b) await db.prepare('UPDATE users SET avatar = ? WHERE id = ?').bind(b.avatar ? dataUrl(b.avatar, 200_000) : null, me.id).run();
     return json({ ok: true });
   }
@@ -613,6 +615,19 @@ async function api(req, env, url) {
     await roomCall(env, '/broadcast', { msg: { type: 'dm', msg, from, to: id, mine: true }, userIds: [me.id] });
     return json({ ok: true, msg, delivered });
   }
+  if (p === '/api/missed-talks' && m === 'GET') {   // what was said in my rooms while my app was closed (since I went offline, 12 h at most)
+    const mark = await db.prepare("SELECT ts FROM chat_reads WHERE user_id = ? AND channel = '#talk'").bind(me.id).first('ts');
+    if (!mark) return json([]);
+    const { results } = await db.prepare(
+      `SELECT m.id, m.ts, m.channel, m.name, m.ms, 1 AS audio FROM messages m JOIN room_since s ON s.user_id = ?1 AND s.channel = m.channel
+       WHERE m.kind = 'talk' AND m.audio IS NOT NULL AND COALESCE(m.user_id, 0) != ?1 AND m.ts > ?2 ORDER BY m.id DESC LIMIT 15`)
+      .bind(me.id, Math.max(mark, Date.now() - 12 * 3_600_000)).all();
+    return json(results.reverse());
+  }
+  if (p === '/api/missed-talks/seen' && m === 'POST') {
+    await db.prepare("INSERT INTO chat_reads (user_id, channel, ts) VALUES (?, '#talk', ?) ON CONFLICT(user_id, channel) DO UPDATE SET ts = excluded.ts").bind(me.id, Date.now()).run();
+    return json({ ok: true });
+  }
   if (p === '/api/voicemail' && m === 'GET') {     // voice messages I have not listened to yet
     const { results } = await db.prepare(
       `SELECT v.msg_id AS id, v.ts, v.from_id, COALESCE(u.name, mm.name) AS name, u.dept, u.avatar IS NOT NULL AS has_avatar, mm.ms, mm.channel
@@ -757,8 +772,10 @@ async function api(req, env, url) {
     const now = Date.now();
     const sos = await db.prepare(`SELECT s.ts, s.place, u.name AS reporter, u.dept AS reporter_dept FROM sos s JOIN users u ON u.id = s.user_id
       WHERE s.status = 'open' AND s.ts > ? AND s.user_id != ? ORDER BY s.id DESC LIMIT 1`).bind(now - 30 * 60_000, me.id).first();
+    const call = await db.prepare(`SELECT ts, title, body FROM notifications WHERE user_id = ? AND kind = 'call' AND ts > ? ORDER BY id DESC LIMIT 1`).bind(me.id, now - 90_000).first();
     const n = await db.prepare(`SELECT ts, kind, title, body, ref FROM notifications WHERE user_id = ? AND kind IN ('dm', 'room') AND ts > ? ORDER BY id DESC LIMIT 1`).bind(me.id, now - 30 * 60_000).first();
     if (sos && (!n || sos.ts >= n.ts)) return json({ kind: 'sos', title: '🚨 แจ้งเหตุฉุกเฉิน', body: `แจ้งโดย ${sos.reporter}${sos.reporter_dept ? ' (' + sos.reporter_dept + ')' : ''}${sos.place ? ' · ' + sos.place : ''}`, url: './#/sos' });
+    if (call && (!n || call.ts >= n.ts) && (!sos || call.ts >= sos.ts)) return json({ kind: 'call', title: call.title, body: call.body, url: './' });
     if (n && n.kind === 'room') return json({ kind: 'dm', title: n.title, body: n.body, url: './#/convos', tag: n.ref });
     if (n) { const from = /^dm:(\d+)$/.exec(n.ref || ''); return json({ kind: n.title.startsWith('🎙') ? 'voice' : 'dm', title: n.title, body: n.body, url: from ? `./#/dm?u=${from[1]}` : './#/notifications', tag: n.ref || 'dm' }); }
     return json({ kind: 'none' });
