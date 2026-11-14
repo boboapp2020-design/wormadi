@@ -2391,7 +2391,6 @@ ROUTES.sos = p => {
       <button class="sosring" id="sosHold" type="button" aria-label="กดค้าง 1 วินาทีเพื่อแจ้งเหตุฉุกเฉิน">
         <span class="fill" id="sosFill"></span>
         <span class="in"><svg class="i"><use href="#i-siren"/></svg><b>กดค้าง</b><small>1 วินาที เพื่อแจ้งเหตุ</small></span></button>
-      <button class="btn dng hidden" id="sosStop" type="button" style="align-self:stretch;margin:4px 18px 0;min-height:56px;font-size:18px">${icon('x')}หยุดแจ้งเหตุ (กดผิด / ปลอดภัยแล้ว)</button>
       <div class="sosme">ผู้แจ้ง: <b>${esc(me.name || '')}</b>${me.dept ? ` (${esc(me.dept)})` : ''}<br><span id="gpsInfo">${icon('pin')} กำลังหาตำแหน่ง GPS…</span></div>
       <div class="field plain" style="margin:0 18px;align-self:stretch"><input id="sp" maxlength="120" placeholder="จุดเกิดเหตุ (ไม่ใส่ก็ได้) เช่น อาคารหม้อต้ม" value="${esc(p.place || '')}"></div>
       <div class="err" id="serr" role="alert" style="text-align:center"></div>
@@ -2405,7 +2404,7 @@ ROUTES.sos = p => {
     let t = null, busy = false;
     const reset = () => { clearTimeout(t); fill.style.transition = 'transform .2s'; fill.style.transform = 'scale(0)'; btn.classList.remove('hold'); };
     const fire = async () => {
-      if (busy) return; busy = true; reset();
+      if (busy || S.sosMine) return; busy = true; reset();
       btn.classList.add('sent'); btn.querySelector('.in').innerHTML = '<b>กำลังแจ้งเหตุ…</b>';
       try {
         const r = await api('/api/sos', { method: 'POST', body: { place: $('sp').value.trim(), lat: pos ? pos.latitude : null, lng: pos ? pos.longitude : null } });
@@ -2413,28 +2412,40 @@ ROUTES.sos = p => {
         btn.querySelector('.in').innerHTML = `<svg class="i"><use href="#i-check"/></svg><b>แจ้งเหตุแล้ว</b><small>เสียงเตือนดังที่ ${r.delivered} เครื่อง</small>`;
         toast(`แจ้งเหตุแล้ว เสียงเตือนดังที่ ${r.delivered} เครื่องที่เข้าสู่ระบบอยู่`);
         renderSosList();
-        const st = $('sosStop'); if (st) { st.classList.remove('hidden'); st.onclick = () => stopSos(r.id); }
-        setTimeout(() => { busy = false; btn.classList.remove('sent'); const i = btn.querySelector('.in'); if (i) i.innerHTML = '<svg class="i"><use href="#i-siren"/></svg><b>กดค้าง</b><small>1 วินาที เพื่อแจ้งเหตุ</small>'; }, 8000);
+        S.sosMine = r.id;
+        setTimeout(() => { busy = false; sosBtnMode(); }, 2500);
       } catch (e) {
         busy = false; btn.classList.remove('sent'); $('serr').textContent = e.message;
         btn.querySelector('.in').innerHTML = '<svg class="i"><use href="#i-siren"/></svg><b>กดค้าง</b><small>1 วินาที เพื่อแจ้งเหตุ</small>';
       }
     };
+    let armed = false;
     btn.onpointerdown = e => {
-      if (busy) return; e.preventDefault(); btn.classList.add('hold');
+      if (busy) return; e.preventDefault();
+      if (S.sosMine) { armed = true; return; }                 // stop mode: a plain tap stops it
+      armed = false; btn.classList.add('hold');
       fill.style.transition = 'transform 1s linear'; fill.style.transform = 'scale(1)';
       t = setTimeout(fire, 1000);
     };
     for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(ev, () => { if (!busy) reset(); });
     btn.oncontextmenu = e => e.preventDefault();
+    btn.onclick = () => { if (S.sosMine && armed && !busy) { armed = false; stopSos(S.sosMine); } };
     btn.onkeydown = async e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (await ask('แจ้งเหตุฉุกเฉิน? ทุกเครื่องจะมีเสียงเตือน', { title: 'แจ้งเหตุฉุกเฉิน', yes: 'แจ้งเหตุ', danger: true, icon: 'siren' })) fire(); } };
   });
   renderSosList();
 };
+/** the round SOS button: "hold to raise" normally, "tap to stop" while my own alarm is open */
+function sosBtnMode() {
+  const btn = $('sosHold'); if (!btn) return;
+  const stop = !!S.sosMine, i = btn.querySelector('.in');
+  btn.classList.remove('sent', 'hold'); btn.classList.toggle('stop', stop);
+  btn.setAttribute('aria-label', stop ? 'แตะเพื่อหยุดแจ้งเหตุ' : 'กดค้าง 1 วินาทีเพื่อแจ้งเหตุฉุกเฉิน');
+  if (i) i.innerHTML = stop ? '<svg class="i"><use href="#i-x"/></svg><b>หยุดแจ้งเหตุ</b><small>แตะเพื่อหยุด · กำลังเตือนทุกเครื่อง</small>' : '<svg class="i"><use href="#i-siren"/></svg><b>กดค้าง</b><small>1 วินาที เพื่อแจ้งเหตุ</small>';
+}
 /** the person who raised the alarm (or a lead) stops it: every phone goes quiet */
 async function stopSos(id) {
   if (!await ask('หยุดการแจ้งเหตุนี้?\nเสียงเตือนทุกเครื่องจะหยุด', { title: 'หยุดแจ้งเหตุ', yes: 'หยุดแจ้งเหตุ', danger: true, icon: 'siren' })) return;
-  try { await api(`/api/sos/${id}/close`, { method: 'POST' }); toast('หยุดแจ้งเหตุแล้ว เสียงเตือนทุกเครื่องหยุด'); const st = $('sosStop'); if (st) st.classList.add('hidden'); renderSosList(); } catch (e) { toast(e.message); }
+  try { await api(`/api/sos/${id}/close`, { method: 'POST' }); toast('หยุดแจ้งเหตุแล้ว เสียงเตือนทุกเครื่องหยุด'); if (S.sosMine === Number(id)) S.sosMine = null; sosBtnMode(); renderSosList(); } catch (e) { toast(e.message); }
 }
 async function renderSosList() {
   const el = $('sosList'); if (!el || !ACC()) return;
@@ -2448,8 +2459,9 @@ async function renderSosList() {
       ${s.status === 'open' ? (lead || (S.user && s.user_id === S.user.id) ? `<button class="btn sm dng" data-close="${s.id}">${S.user && s.user_id === S.user.id ? 'หยุดแจ้งเหตุ' : 'ปิดเหตุ'}</button>` : '<span class="pill talk">กำลังดำเนินการ</span>') : '<span class="pill gray">ปิดแล้ว</span>'}</div>`;
   }).join('')}</div>` : '<div class="empty">ยังไม่มีการแจ้งเหตุ</div>';
   for (const b of $$('[data-close]', el)) b.onclick = () => stopSos(b.dataset.close);
-  const mine = rows.find(x => x.status === 'open' && S.user && x.user_id === S.user.id), st = $('sosStop');
-  if (st) { st.classList.toggle('hidden', !mine); if (mine) st.onclick = () => stopSos(mine.id); }
+  const mine = rows.find(x => x.status === 'open' && S.user && x.user_id === S.user.id);
+  const was = S.sosMine; S.sosMine = mine ? mine.id : null;
+  const b0 = $('sosHold'); if (b0 && !b0.classList.contains('sent') && (was !== S.sosMine || b0.classList.contains('stop') !== !!S.sosMine)) sosBtnMode();
 }
 
 // ---------------------------------------------------------------- 12 notifications

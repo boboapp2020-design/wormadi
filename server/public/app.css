@@ -614,3 +614,9 @@ label.lbl.lvlbl { margin:4px 2px 8px; line-height:1.6; }
 .pc.cap { animation:capGlow .65s ease-in-out forwards; }
 @keyframes capGlow { 0% { box-shadow:0 0 0 3px #ff3b30, 0 0 14px 4px rgba(255,59,48,.9); } 60% { box-shadow:0 0 0 4px #ff3b30, 0 0 18px 6px rgba(255,59,48,.9); transform:scale(1.05); } 100% { box-shadow:0 0 0 4px #ff3b30, 0 0 8px 2px rgba(255,59,48,.6); transform:scale(.82); opacity:.55; } }
 @media (prefers-reduced-motion: reduce) { .pc.cap { animation:none; box-shadow:0 0 0 4px #ff3b30; opacity:.6; } }
+
+/* SOS button while my own alarm is open: same button, now "tap to stop" */
+.sosring.stop { background:radial-gradient(circle at 50% 40%, #3a4250, #161a22); box-shadow:0 0 0 10px rgba(207,32,32,.35); animation:sosStopPulse 1.2s ease-in-out infinite; }
+.sosring.stop .in b { font-size:24px; }
+@keyframes sosStopPulse { 50% { box-shadow:0 0 0 18px rgba(207,32,32,.12); } }
+@media (prefers-reduced-motion: reduce) { .sosring.stop { animation:none; } }
