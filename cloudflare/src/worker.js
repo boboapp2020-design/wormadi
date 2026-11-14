@@ -823,7 +823,8 @@ async function api(req, env, url) {
     return json({ ok: true, acks });
   }
   if (seg[1] === 'sos' && id && seg[3] === 'close' && m === 'POST') {
-    if (!roleAtLeast(me.role, 'lead')) return fail(403, 'เฉพาะหัวหน้าหรือผู้ดูแลระบบที่ปิดเหตุได้');
+    const own = await db.prepare('SELECT user_id FROM sos WHERE id = ?').bind(id).first('user_id');
+    if (!roleAtLeast(me.role, 'lead') && own !== me.id) return fail(403, 'ปิดเหตุได้เฉพาะคนที่แจ้ง หัวหน้า หรือผู้ดูแลระบบ');
     await db.prepare(`UPDATE sos SET status = 'closed', closed_by = ?, closed_at = ? WHERE id = ?`).bind(me.id, Date.now(), id).run();
     await roomCall(env, '/ring-stop', { key: 'sos:' + id }).catch(() => {});
     await roomCall(env, '/broadcast', { msg: { type: 'sos_closed', id, by: me.name } });

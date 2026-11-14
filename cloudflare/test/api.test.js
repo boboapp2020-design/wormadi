@@ -114,7 +114,7 @@ test('SOS: แจ้งเหตุ -> ทุกเครื่องได้�
   await call('POST', `/api/sos/${r.body.id}/ack`, T.Web);
   const ack = await a.wait('sos_ack');
   assert.equal(ack.by, 'Web'); assert.equal(ack.acks, 1);
-  assert.equal((await call('POST', `/api/sos/${r.body.id}/close`, T.A)).status, 403);
+  assert.equal((await call('POST', `/api/sos/${r.body.id}/close`, T.Web)).status, 403);
   assert.equal((await call('POST', `/api/sos/${r.body.id}/close`, T.Lead)).status, 200);
   await w.wait('sos_closed');
   const list = (await call('GET', '/api/sos', T.Web)).body;
@@ -670,6 +670,15 @@ test('วอส่วนตัวหาคนที่ปิดแอป: ไม
   await call('PATCH', '/api/me', T['แชทC'], { room_push: true });
   assert.ok(Array.isArray((await call('GET', '/api/missed-talks', T['แชทC'])).body));
   assert.equal((await call('POST', '/api/missed-talks/seen', T['แชทC'], {})).status, 200);
+});
+
+test('แจ้งเหตุฉุกเฉิน: คนที่กดแจ้งหยุดเองได้ · คนอื่น (ไม่ใช่หัวหน้า) หยุดไม่ได้', async () => {
+  const s = await call('POST', '/api/sos', T['แชทA'], { place: 'ทดสอบหยุด' });
+  assert.equal(s.status, 200);
+  assert.equal((await call('POST', '/api/sos/' + s.body.id + '/close', T['แชทB'])).status, 403, 'คนอื่นหยุดไม่ได้');
+  assert.equal((await call('POST', '/api/sos/' + s.body.id + '/close', T['แชทA'])).status, 200, 'คนแจ้งหยุดเองได้');
+  const row = (await call('GET', '/api/sos', T['แชทA'])).body.find(x => x.id === s.body.id);
+  assert.equal(row.status, 'closed');
 });
 
 (async () => {

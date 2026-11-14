@@ -2391,6 +2391,7 @@ ROUTES.sos = p => {
       <button class="sosring" id="sosHold" type="button" aria-label="กดค้าง 1 วินาทีเพื่อแจ้งเหตุฉุกเฉิน">
         <span class="fill" id="sosFill"></span>
         <span class="in"><svg class="i"><use href="#i-siren"/></svg><b>กดค้าง</b><small>1 วินาที เพื่อแจ้งเหตุ</small></span></button>
+      <button class="btn dng hidden" id="sosStop" type="button" style="align-self:stretch;margin:4px 18px 0;min-height:56px;font-size:18px">${icon('x')}หยุดแจ้งเหตุ (กดผิด / ปลอดภัยแล้ว)</button>
       <div class="sosme">ผู้แจ้ง: <b>${esc(me.name || '')}</b>${me.dept ? ` (${esc(me.dept)})` : ''}<br><span id="gpsInfo">${icon('pin')} กำลังหาตำแหน่ง GPS…</span></div>
       <div class="field plain" style="margin:0 18px;align-self:stretch"><input id="sp" maxlength="120" placeholder="จุดเกิดเหตุ (ไม่ใส่ก็ได้) เช่น อาคารหม้อต้ม" value="${esc(p.place || '')}"></div>
       <div class="err" id="serr" role="alert" style="text-align:center"></div>
@@ -2412,6 +2413,7 @@ ROUTES.sos = p => {
         btn.querySelector('.in').innerHTML = `<svg class="i"><use href="#i-check"/></svg><b>แจ้งเหตุแล้ว</b><small>เสียงเตือนดังที่ ${r.delivered} เครื่อง</small>`;
         toast(`แจ้งเหตุแล้ว เสียงเตือนดังที่ ${r.delivered} เครื่องที่เข้าสู่ระบบอยู่`);
         renderSosList();
+        const st = $('sosStop'); if (st) { st.classList.remove('hidden'); st.onclick = () => stopSos(r.id); }
         setTimeout(() => { busy = false; btn.classList.remove('sent'); const i = btn.querySelector('.in'); if (i) i.innerHTML = '<svg class="i"><use href="#i-siren"/></svg><b>กดค้าง</b><small>1 วินาที เพื่อแจ้งเหตุ</small>'; }, 8000);
       } catch (e) {
         busy = false; btn.classList.remove('sent'); $('serr').textContent = e.message;
@@ -2429,6 +2431,11 @@ ROUTES.sos = p => {
   });
   renderSosList();
 };
+/** the person who raised the alarm (or a lead) stops it: every phone goes quiet */
+async function stopSos(id) {
+  if (!await ask('หยุดการแจ้งเหตุนี้?\nเสียงเตือนทุกเครื่องจะหยุด', { title: 'หยุดแจ้งเหตุ', yes: 'หยุดแจ้งเหตุ', danger: true, icon: 'siren' })) return;
+  try { await api(`/api/sos/${id}/close`, { method: 'POST' }); toast('หยุดแจ้งเหตุแล้ว เสียงเตือนทุกเครื่องหยุด'); const st = $('sosStop'); if (st) st.classList.add('hidden'); renderSosList(); } catch (e) { toast(e.message); }
+}
 async function renderSosList() {
   const el = $('sosList'); if (!el || !ACC()) return;
   let rows = [];
@@ -2438,9 +2445,11 @@ async function renderSosList() {
     const [n, ic, c] = SOS[s.kind] || SOS.other;
     return `<div class="li"><span class="ic" style="background:${c}">${icon(ic)}</span><div class="grow"><div class="t1">${s.kind === 'general' ? 'แจ้งโดย ' + esc(s.reporter) : n}${s.place ? ` · ${esc(s.place)}` : ''}</div>
       <div class="t2">${esc(s.reporter)} · ${fmtTime(s.ts)} ${fmtDate(s.ts)} · รับทราบ ${s.acks} คน</div></div>
-      ${s.status === 'open' ? (lead ? `<button class="btn sm" data-close="${s.id}">ปิดเหตุ</button>` : '<span class="pill talk">กำลังดำเนินการ</span>') : '<span class="pill gray">ปิดแล้ว</span>'}</div>`;
+      ${s.status === 'open' ? (lead || (S.user && s.user_id === S.user.id) ? `<button class="btn sm dng" data-close="${s.id}">${S.user && s.user_id === S.user.id ? 'หยุดแจ้งเหตุ' : 'ปิดเหตุ'}</button>` : '<span class="pill talk">กำลังดำเนินการ</span>') : '<span class="pill gray">ปิดแล้ว</span>'}</div>`;
   }).join('')}</div>` : '<div class="empty">ยังไม่มีการแจ้งเหตุ</div>';
-  for (const b of $$('[data-close]', el)) b.onclick = async () => { if (!await ask('ปิดเหตุนี้ (สถานการณ์ปลอดภัยแล้ว)?', { title: 'ปิดเหตุฉุกเฉิน', yes: 'ปิดเหตุ' })) return; try { await api(`/api/sos/${b.dataset.close}/close`, { method: 'POST' }); renderSosList(); } catch (e) { toast(e.message); } };
+  for (const b of $$('[data-close]', el)) b.onclick = () => stopSos(b.dataset.close);
+  const mine = rows.find(x => x.status === 'open' && S.user && x.user_id === S.user.id), st = $('sosStop');
+  if (st) { st.classList.toggle('hidden', !mine); if (mine) st.onclick = () => stopSos(mine.id); }
 }
 
 // ---------------------------------------------------------------- 12 notifications
